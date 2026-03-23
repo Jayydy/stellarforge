@@ -8,7 +8,7 @@
 [Describe the tests you ran to verify your changes]
 
 ## Checklist
-- [ ] I have run `cargo fmt` (or equivalent formatter)
-- [ ] I have run `cargo clippy` (or equivalent linter)
-- [ ] All tests pass locally
-- [ ] I have labeled this PR with 'good first issue' or 'dx' where applicable.
+- [  ] I have run `cargo fmt` (or equivalent formatter)
+- [  ] I have run `cargo clippy` (or equivalent linter)
+- [  ] All tests pass locally
+- [  ] I have labeled this PR with 'good first issue' or 'dx' where applicable.
