@@ -1,14 +1,14 @@
-#! [no_std]
+#![no_std]
 
- //! # forge-stream
- //!
- //! Real-time token streaming — pay-per-second token transfers on Soroban.
- //!
- //! ## Overview
- //! - Sender creates a stream with a rate (tokens per second) and duration
- //! - Recipient can withdraw accrued tokens at any time
- //! - Sender can cancel and reclaim unstreamed tokens
- //! - Multiple streams can run in parallel (keyed by stream_id)
+//! # forge-stream
+//!
+//! Real-time token streaming — pay-per-second token transfers on Soroban.
+//!
+//! ## Overview
+//! - Sender creates a stream with a rate (tokens per second) and duration
+//! - Recipient can withdraw accrued tokens at any time
+//! - Sender can cancel and reclaim unstreamed tokens
+//! - Multiple streams can run in parallel (keyed by stream_id)
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -97,7 +97,7 @@ impl ForgeStream {
     /// u64: Unique stream ID
     ///
     /// # Example
-    /// ```
+    /// ```rust,ignore
     /// let stream_id = forge_stream.create_stream(
     ///     env,
     ///     sender,
@@ -106,7 +106,7 @@ impl ForgeStream {
     ///     100i128,  // 100 tokens/sec
     ///     3600u64,  // 1 hour = 360,000 total tokens
     /// )?;
-    /// ```
+    /// ```rust,ignore
     ///
     /// # Errors
     /// - `InvalidConfig` if rate <= 0 or duration == 0
@@ -188,11 +188,11 @@ impl ForgeStream {
     /// i128: Amount withdrawn (or 0 if nothing accrued)
     ///
     /// # Example
-    /// ```
+    /// ```rust,ignore
     /// // After 10 seconds at 100/sec rate:
     /// let withdrawn = forge_stream.withdraw(env, stream_id)?;
     /// assert_eq!(withdrawn, 1000);  // 100 * 10
-    /// ```
+    /// ```rust,ignore
     ///
     /// # Errors
     /// - `StreamNotFound`
@@ -253,11 +253,11 @@ impl ForgeStream {
     /// `Ok(())`
     ///
     /// # Example
-    /// ```
+    /// ```rust,ignore
     /// // Stream: 100/sec for 3600s, cancel after 100s:
     /// // recipient gets 10,000 (100*100), sender refunded 350,000
     /// forge_stream.cancel_stream(env, stream_id)?;
-    /// ```
+    /// ```rust,ignore
     ///
     /// # Errors
     /// - `StreamNotFound`
@@ -283,7 +283,10 @@ impl ForgeStream {
         let returnable = total - streamed;
 
         if stream.counted_active {
-            Self::set_active_streams_count(&env, Self::active_streams_count(&env).saturating_sub(1));
+            Self::set_active_streams_count(
+                &env,
+                Self::active_streams_count(&env).saturating_sub(1),
+            );
             stream.counted_active = false;
         }
 
@@ -362,10 +365,8 @@ impl ForgeStream {
             .instance()
             .set(&DataKey::Stream(stream_id), &stream);
 
-        env.events().publish(
-            (Symbol::new(&env, "stream_paused"),),
-            (stream_id,),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "stream_paused"),), (stream_id,));
 
         Ok(())
     }
@@ -415,10 +416,8 @@ impl ForgeStream {
             .instance()
             .set(&DataKey::Stream(stream_id), &stream);
 
-        env.events().publish(
-            (Symbol::new(&env, "stream_resumed"),),
-            (stream_id,),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "stream_resumed"),), (stream_id,));
 
         Ok(())
     }
@@ -440,12 +439,12 @@ impl ForgeStream {
     /// - `is_finished`: now >= end_time
     ///
     /// # Example
-    /// ```
+    /// ```rust,ignore
     /// let status = forge_stream.get_stream_status(env, stream_id)?;
     /// if status.withdrawable > 0 {
     ///     forge_stream.withdraw(env, stream_id)?;
     /// }
-    /// ```
+    /// ```rust,ignore
     pub fn get_stream_status(env: Env, stream_id: u64) -> Result<StreamStatus, StreamError> {
         let stream: Stream = env
             .storage()
@@ -485,10 +484,10 @@ impl ForgeStream {
     /// `Stream` struct
     ///
     /// # Example
-    /// ```
+    /// ```rust,ignore
     /// let stream = forge_stream.get_stream(env, stream_id)?;
     /// assert_eq!(stream.rate_per_second, 100i128);
-    /// ```
+    /// ```rust,ignore
     ///
     /// # Errors
     /// - `StreamNotFound`
@@ -562,12 +561,17 @@ impl ForgeStream {
 
     fn sync_elapsed_streams(env: &Env) -> u64 {
         let now = env.ledger().timestamp();
-        let next_id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0_u64);
+        let next_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextId)
+            .unwrap_or(0_u64);
         let mut active_count = Self::active_streams_count(env);
 
         let mut stream_id = 0_u64;
         while stream_id < next_id {
-            let maybe_stream: Option<Stream> = env.storage().instance().get(&DataKey::Stream(stream_id));
+            let maybe_stream: Option<Stream> =
+                env.storage().instance().get(&DataKey::Stream(stream_id));
             if let Some(mut stream) = maybe_stream {
                 if stream.counted_active && !stream.cancelled && now >= stream.end_time {
                     stream.counted_active = false;
@@ -597,9 +601,15 @@ mod tests {
         token::{Client as TokenClient, StellarAssetClient},
     };
 
-    fn make_token(env: &Env, contract_id: &Address, sender: &Address, total: i128) -> Address {
+    fn setup_token(env: &Env, sender: &Address, total: i128) -> Address {
         let token_admin = Address::generate(env);
         let token_id = env.register_stellar_asset_contract_v2(token_admin).address();
+        StellarAssetClient::new(env, &token_id).mint(sender, &total);
+    fn make_token(env: &Env, _contract_id: &Address, sender: &Address, total: i128) -> Address {
+        let token_admin = Address::generate(env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(sender, &total);
         token_id
     }
@@ -612,7 +622,7 @@ mod tests {
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = make_token(&env, &contract_id, &sender, 100_000);
+        let _token = make_token(&env, &contract_id, &sender, 100_000);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -661,7 +671,7 @@ mod tests {
         let recipient = Address::generate(&env);
         let token = make_token(&env, &contract_id, &sender, 100_000);
 
-        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        let _stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -685,7 +695,7 @@ mod tests {
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = make_token(&env, &contract_id, &sender, 100_000);
+        let _token = make_token(&env, &contract_id, &sender, 100_000);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -712,7 +722,7 @@ mod tests {
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = make_token(&env, &contract_id, &sender, 100_000);
+        let _token = make_token(&env, &contract_id, &sender, 100_000);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -738,7 +748,7 @@ mod tests {
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = make_token(&env, &contract_id, &sender, 100_000);
+        let _token = make_token(&env, &contract_id, &sender, 100_000);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -757,62 +767,47 @@ mod tests {
         assert_eq!(status.streamed, 100_000);
     }
 
-    // ── Rounding / extreme-rate tests ─────────────────────────────────────────
+    // ── Rounding / cancellation split tests ──────────────────────────────────
 
     /// Rate of 1 token/sec: streamed amount must equal elapsed seconds exactly.
     #[test]
     fn test_low_rate_one_token_per_second() {
-    #[test]
-    fn test_withdraw_success() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+
+        let duration = 1_000u64;
+        let rate = 1i128;
+        let total = rate * duration as i128;
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let duration = 1_000u64;
         let rate = 1i128;
         let total = rate * duration as i128; // 1_000
+        let token = setup_token(&env, &sender, total);
 
-        let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &rate, &duration);
 
-        // Mid-stream: 333 seconds elapsed
         env.ledger().with_mut(|l| l.timestamp += 333);
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         assert_eq!(status.streamed, 333);
         assert_eq!(status.remaining, total - 333);
         assert_eq!(status.streamed + status.remaining, total);
 
+        env.ledger().with_mut(|l| l.timestamp += 667);
         // Full duration elapsed
         env.ledger().with_mut(|l| l.timestamp += 667); // total += 1000
-        let status = client.get_stream_status(&stream_id).unwrap();
-        assert_eq!(status.streamed, total);
-        assert_eq!(status.remaining, 0);
-        assert_eq!(status.streamed + status.remaining, total);
-    }
-
-    /// High rate near i128::MAX / duration: no overflow, invariant holds.
-    #[test]
-    fn test_high_rate_near_max() {
-
-        let duration = 1_000u64;
-        let rate = 1i128;
-        let total = rate * duration as i128; // 1_000
-
-        let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
-
-        // Mid-stream: 333 seconds elapsed
-        env.ledger().with_mut(|l| l.timestamp += 333);
-        let status = client.get_stream_status(&stream_id).unwrap();
-        assert_eq!(status.streamed, 333);
-        assert_eq!(status.remaining, total - 333);
-        assert_eq!(status.streamed + status.remaining, total);
-
-        // Full duration elapsed
-        env.ledger().with_mut(|l| l.timestamp += 667); // total += 1000
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         assert_eq!(status.streamed, total);
         assert_eq!(status.remaining, 0);
         assert_eq!(status.streamed + status.remaining, total);
@@ -823,55 +818,30 @@ mod tests {
     fn test_high_rate_near_max() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = make_token(&env, &contract_id, &sender, i128::MAX);
 
         let duration = 1_000u64;
         // Largest rate that won't overflow i128 when multiplied by duration
         let rate = i128::MAX / duration as i128;
         let total = rate * duration as i128;
+        let token = setup_token(&env, &sender, total);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
 
         // Mid-stream
         env.ledger().with_mut(|l| l.timestamp += 500);
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         assert_eq!(status.streamed, rate * 500);
         assert_eq!(status.remaining, total - rate * 500);
         assert_eq!(status.streamed + status.remaining, total);
 
         // At end
         env.ledger().with_mut(|l| l.timestamp += 500);
-        let status = client.get_stream_status(&stream_id).unwrap();
-        assert_eq!(status.streamed, total);
-        assert_eq!(status.remaining, 0);
-        assert_eq!(status.streamed + status.remaining, total);
-    }
-
-    /// streamed + remaining == total at every sampled point during a stream.
-    #[test]
-    fn test_streamed_plus_remaining_equals_total_invariant() {
-
-        let duration = 1_000u64;
-        // Largest rate that won't overflow i128 when multiplied by duration
-        let rate = i128::MAX / duration as i128;
-        let total = rate * duration as i128;
-
-        let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
-
-        // Mid-stream
-        env.ledger().with_mut(|l| l.timestamp += 500);
-        let status = client.get_stream_status(&stream_id).unwrap();
-        assert_eq!(status.streamed, rate * 500);
-        assert_eq!(status.remaining, total - rate * 500);
-        assert_eq!(status.streamed + status.remaining, total);
-
-        // At end
-        env.ledger().with_mut(|l| l.timestamp += 500);
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         assert_eq!(status.streamed, total);
         assert_eq!(status.remaining, 0);
         assert_eq!(status.streamed + status.remaining, total);
@@ -882,84 +852,94 @@ mod tests {
     fn test_streamed_plus_remaining_equals_total_invariant() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
 
-        let rate = 7i128; // intentionally odd to surface any rounding
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+
+        let rate = 7i128;
         let duration = 100u64;
-        let total = rate * duration as i128; // 700
-
-        let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
-
-        for tick in [1u64, 10, 33, 50, 77, 99, 100, 150] {
-            env.ledger().with_mut(|l| l.timestamp = tick);
-            let status = client.get_stream_status(&stream_id).unwrap();
-            assert_eq!(
-                status.streamed + status.remaining,
-                total,
-                "invariant broken at tick={tick}: streamed={} remaining={}",
-                status.streamed,
-                status.remaining
-            );
-        }
-    }
-
-    /// On cancel, withdrawable + returnable == total (no tokens lost or created).
-    #[test]
-    fn test_cancel_no_tokens_lost() {
-
-        let rate = 7i128; // intentionally odd to surface any rounding
-        let duration = 100u64;
-        let total = rate * duration as i128; // 700
-
-        let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
-
-        for tick in [1u64, 10, 33, 50, 77, 99, 100, 150] {
-            env.ledger().with_mut(|l| l.timestamp = tick);
-            let status = client.get_stream_status(&stream_id).unwrap();
-            assert_eq!(
-                status.streamed + status.remaining,
-                total,
-                "invariant broken at tick={tick}: streamed={} remaining={}",
-                status.streamed,
-                status.remaining
-            );
-        }
-    }
-
-    /// On cancel, withdrawable + returnable == total (no tokens lost or created).
-    #[test]
-    fn test_cancel_no_tokens_lost() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
-        let client = ForgeStreamClient::new(&env, &contract_id);
-        let sender = Address::generate(&env);
-        let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
-
-        let rate = 3i128;
-        let duration = 1_000u64;
         let total = rate * duration as i128;
 
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &rate, &duration);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
+
+        let rate = 7i128; // intentionally odd to surface any rounding
+        let duration = 100u64;
+        let total = rate * duration as i128; // 700
+        let token = setup_token(&env, &sender, total);
+
         let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
 
-        // Advance to a mid-stream point, then cancel
-        env.ledger().with_mut(|l| l.timestamp += 400);
+        for tick in [1u64, 10, 33, 50, 77, 99, 100, 150] {
+            env.ledger().with_mut(|l| l.timestamp = tick);
+            let status = client.get_stream_status(&stream_id);
+            assert_eq!(
+                status.streamed + status.remaining,
+                total,
+                "invariant broken at tick={tick}: streamed={} remaining={}",
+                status.streamed,
+                status.remaining
+            );
+        }
+    }
 
+    #[test]
+    fn test_cancel_stream_split_at_halfway() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        let token = TokenClient::new(&env, &token_id);
+
+        let rate = 100i128;
+        let duration = 1_000u64;
+        let halfway = duration / 2;
+        let total = rate * duration as i128;
+        let expected_accrued = rate * halfway as i128;
+        let expected_remaining = total - expected_accrued;
+
+        sac.mint(&sender, &10_000_000i128);
+        let token = setup_token(&env, &sender, total);
+
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &rate, &duration);
+
+        env.ledger().with_mut(|l| l.timestamp += halfway);
+
+        let recipient_before_cancel = token.balance(&recipient);
+        let sender_before_cancel = token.balance(&sender);
         // Capture expected split before cancel
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         let expected_withdrawable = status.withdrawable;
         let expected_returnable = total - status.streamed;
 
         client.cancel_stream(&stream_id);
 
-        // Verify the split sums to total
-        assert_eq!(expected_withdrawable + expected_returnable, total);
-        assert_eq!(status.streamed + status.remaining, total);
+        let recipient_after_cancel = token.balance(&recipient);
+        let sender_after_cancel = token.balance(&sender);
+
+        let recipient_received = recipient_after_cancel - recipient_before_cancel;
+        let sender_received = sender_after_cancel - sender_before_cancel;
+
+        assert_eq!(recipient_received, expected_accrued);
+        assert_eq!(sender_received, expected_remaining);
+        assert_eq!(recipient_received + sender_received, total);
     }
 
     // ── get_claimable tests ───────────────────────────────────────────────────
@@ -968,49 +948,75 @@ mod tests {
     fn test_get_claimable_active_stream() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
-        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
         env.ledger().with_mut(|l| l.timestamp += 50);
 
-        assert_eq!(client.get_claimable(&stream_id).unwrap(), 5_000); // 100 * 50
+        assert_eq!(client.get_claimable(&stream_id), 5_000);
+        assert_eq!(client.get_claimable(&stream_id), 5_000); // 100 * 50
     }
 
     #[test]
     fn test_get_claimable_fully_elapsed_stream() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
-        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
-        env.ledger().with_mut(|l| l.timestamp += 2000); // past end_time
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
 
-        assert_eq!(client.get_claimable(&stream_id).unwrap(), 100_000); // 100 * 1000
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 2000);
+
+        assert_eq!(client.get_claimable(&stream_id), 100_000);
+        assert_eq!(client.get_claimable(&stream_id), 100_000); // 100 * 1000
     }
 
     #[test]
     fn test_get_claimable_cancelled_stream_returns_zero() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
         env.ledger().with_mut(|l| l.timestamp += 200);
         client.cancel_stream(&stream_id);
 
-        assert_eq!(client.get_claimable(&stream_id).unwrap(), 0);
+        assert_eq!(client.get_claimable(&stream_id), 0);
 
         let rate = 3i128;
         let duration = 1_000u64;
@@ -1022,7 +1028,7 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp += 400);
 
         // Capture expected split before cancel
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         let expected_withdrawable = status.withdrawable;
         let expected_returnable = total - status.streamed;
 
@@ -1042,22 +1048,22 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp += 400);
 
         // Capture expected split before cancel
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         let expected_withdrawable = status.withdrawable;
         let expected_returnable = total - status.streamed;
 
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 200);
         client.cancel_stream(&stream_id);
 
-        // Verify the split sums to total
-        assert_eq!(expected_withdrawable + expected_returnable, total);
-        assert_eq!(status.streamed + status.remaining, total);
+        assert_eq!(client.get_claimable(&stream_id), 0);
     }
 
     #[test]
     fn test_active_streams_count_tracks_create_and_cancel() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
@@ -1089,7 +1095,7 @@ mod tests {
     fn test_active_streams_count_decrements_on_full_elapsed() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
@@ -1117,18 +1123,19 @@ mod tests {
     fn test_pause_stream() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
         env.ledger().with_mut(|l| l.timestamp += 100);
 
         client.pause_stream(&stream_id);
 
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         assert!(status.is_paused);
         assert!(!status.is_active);
         assert_eq!(status.streamed, 10_000); // 100 * 100s
@@ -1138,11 +1145,12 @@ mod tests {
     fn test_resume_stream() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
         env.ledger().with_mut(|l| l.timestamp += 100);
@@ -1150,13 +1158,13 @@ mod tests {
         client.pause_stream(&stream_id);
         env.ledger().with_mut(|l| l.timestamp += 200); // Paused for 200s
 
-        let status_before = client.get_stream_status(&stream_id).unwrap();
+        let status_before = client.get_stream_status(&stream_id);
         assert!(status_before.is_paused);
         assert_eq!(status_before.streamed, 10_000); // Still 100*100, no accrual during pause
 
         client.resume_stream(&stream_id);
 
-        let status_after = client.get_stream_status(&stream_id).unwrap();
+        let status_after = client.get_stream_status(&stream_id);
         assert!(!status_after.is_paused);
         assert!(status_after.is_active);
         assert_eq!(status_after.streamed, 10_000); // Still the same
@@ -1166,11 +1174,12 @@ mod tests {
     fn test_withdraw_while_paused() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
         env.ledger().with_mut(|l| l.timestamp += 100);
@@ -1178,13 +1187,13 @@ mod tests {
         client.pause_stream(&stream_id);
         env.ledger().with_mut(|l| l.timestamp += 50); // Paused, no new accrual
 
-        let status = client.get_stream_status(&stream_id).unwrap();
+        let status = client.get_stream_status(&stream_id);
         assert_eq!(status.withdrawable, 10_000);
 
         let withdrawn = client.withdraw(&stream_id);
         assert_eq!(withdrawn, 10_000);
 
-        let status_after = client.get_stream_status(&stream_id).unwrap();
+        let status_after = client.get_stream_status(&stream_id);
         assert_eq!(status_after.withdrawn, 10_000);
         assert_eq!(status_after.withdrawable, 0);
     }
@@ -1193,11 +1202,12 @@ mod tests {
     fn test_pause_already_paused() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
         client.pause_stream(&stream_id);
@@ -1210,16 +1220,60 @@ mod tests {
     fn test_resume_not_paused() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeStream, ());
+        let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
 
         let result = client.try_resume_stream(&stream_id);
         assert_eq!(result, Err(Ok(StreamError::InvalidConfig)));
     }
-}
 
+    #[test]
+    fn test_full_stream_withdrawal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        let token = TokenClient::new(&env, &token_id);
+
+        let rate = 100i128;
+        let duration = 1_000u64;
+        let total = rate * duration as i128; // 100_000
+
+        sac.mint(&sender, &total);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &rate, &duration);
+
+        // Advance past the full stream duration
+        env.ledger().with_mut(|l| l.timestamp += duration + 1);
+
+        // withdrawable should equal the total stream amount
+        let status = client.get_stream_status(&stream_id);
+        assert!(status.is_finished);
+        assert!(!status.is_active);
+        assert_eq!(status.withdrawable, total);
+
+        // withdraw() transfers the full amount to the recipient
+        let withdrawn = client.withdraw(&stream_id);
+        assert_eq!(withdrawn, total);
+        assert_eq!(token.balance(&recipient), total);
+
+        // stream is marked inactive (withdrawn == total, nothing left)
+        let status_after = client.get_stream_status(&stream_id);
+        assert_eq!(status_after.withdrawn, total);
+        assert_eq!(status_after.withdrawable, 0);
+        assert!(!status_after.is_active);
+    }
+}
