@@ -19,6 +19,8 @@ pub enum DataKey {
     Stream(u64),
     NextId,
     ActiveStreamsCount,
+    SenderStreams(Address),
+    RecipientStreams(Address),
 }
 
 #[contracttype]
@@ -140,8 +142,8 @@ impl ForgeStream {
         let stream = Stream {
             id: stream_id,
             token,
-            sender,
-            recipient,
+            sender: sender.clone(),
+            recipient: recipient.clone(),
             rate_per_second,
             start_time: now,
             end_time: now + duration_seconds,
@@ -159,6 +161,28 @@ impl ForgeStream {
         env.storage()
             .instance()
             .set(&DataKey::NextId, &(stream_id + 1));
+
+        // Store sender → stream ID mapping
+        let mut sender_streams: soroban_sdk::Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SenderStreams(sender.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env));
+        sender_streams.push_back(stream_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::SenderStreams(sender), &sender_streams);
+
+        // Store recipient → stream ID mapping
+        let mut recipient_streams: soroban_sdk::Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::RecipientStreams(recipient.clone()))
+            .unwrap_or(soroban_sdk::Vec::new(&env));
+        recipient_streams.push_back(stream_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::RecipientStreams(recipient), &recipient_streams);
 
         Self::set_active_streams_count(&env, Self::active_streams_count(&env).saturating_add(1));
 
@@ -530,6 +554,60 @@ impl ForgeStream {
         Ok((streamed - stream.withdrawn).max(0))
     }
 
+    /// Get all stream IDs for a given sender.
+    ///
+    /// Returns a vector of stream IDs where the specified address is the sender.
+    /// Useful for wallets and dashboards to display all outgoing streams.
+    ///
+    /// # Parameters
+    /// - `sender`: Address to look up streams for
+    ///
+    /// # Returns
+    /// `Vec<u64>`: Vector of stream IDs (empty if none found)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let my_streams = forge_stream.get_streams_by_sender(env, sender_address);
+    /// for stream_id in my_streams.iter() {
+    ///     let status = forge_stream.get_stream_status(env, stream_id)?;
+    ///     // Display stream info...
+    /// }
+    /// ```
+    pub fn get_streams_by_sender(env: Env, sender: Address) -> soroban_sdk::Vec<u64> {
+        env.storage()
+            .instance()
+            .get(&DataKey::SenderStreams(sender))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    }
+
+    /// Get all stream IDs for a given recipient.
+    ///
+    /// Returns a vector of stream IDs where the specified address is the recipient.
+    /// Useful for wallets and dashboards to display all incoming streams.
+    ///
+    /// # Parameters
+    /// - `recipient`: Address to look up streams for
+    ///
+    /// # Returns
+    /// `Vec<u64>`: Vector of stream IDs (empty if none found)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let incoming_streams = forge_stream.get_streams_by_recipient(env, recipient_address);
+    /// for stream_id in incoming_streams.iter() {
+    ///     let claimable = forge_stream.get_claimable(env, stream_id)?;
+    ///     if claimable > 0 {
+    ///         forge_stream.withdraw(env, stream_id)?;
+    ///     }
+    /// }
+    /// ```
+    pub fn get_streams_by_recipient(env: Env, recipient: Address) -> soroban_sdk::Vec<u64> {
+        env.storage()
+            .instance()
+            .get(&DataKey::RecipientStreams(recipient))
+            .unwrap_or(soroban_sdk::Vec::new(&env))
+    }
+
     // ── Private ───────────────────────────────────────────────────────────────
 
     fn compute_streamed(stream: &Stream, now: u64) -> i128 {
@@ -605,6 +683,9 @@ mod tests {
         let token_admin = Address::generate(env);
         let token_id = env.register_stellar_asset_contract_v2(token_admin).address();
         StellarAssetClient::new(env, &token_id).mint(sender, &total);
+        token_id
+    }
+
     fn make_token(env: &Env, _contract_id: &Address, sender: &Address, total: i128) -> Address {
         let token_admin = Address::generate(env);
         let token_id = env
@@ -899,7 +980,6 @@ mod tests {
         let client = ForgeStreamClient::new(&env, &contract_id);
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = make_token(&env, &contract_id, &sender, 1_000_000);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -916,7 +996,6 @@ mod tests {
         let expected_remaining = total - expected_accrued;
 
         sac.mint(&sender, &10_000_000i128);
-        let token = setup_token(&env, &sender, total);
 
         let stream_id = client.create_stream(&sender, &token_id, &recipient, &rate, &duration);
 
@@ -924,10 +1003,6 @@ mod tests {
 
         let recipient_before_cancel = token.balance(&recipient);
         let sender_before_cancel = token.balance(&sender);
-        // Capture expected split before cancel
-        let status = client.get_stream_status(&stream_id);
-        let expected_withdrawable = status.withdrawable;
-        let expected_returnable = total - status.streamed;
 
         client.cancel_stream(&stream_id);
 
@@ -1275,5 +1350,171 @@ mod tests {
         assert_eq!(status_after.withdrawn, total);
         assert_eq!(status_after.withdrawable, 0);
         assert!(!status_after.is_active);
+    }
+
+    #[test]
+    fn test_get_streams_by_sender_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+
+        let streams = client.get_streams_by_sender(&sender);
+        assert_eq!(streams.len(), 0);
+    }
+
+    #[test]
+    fn test_get_streams_by_recipient_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let recipient = Address::generate(&env);
+
+        let streams = client.get_streams_by_recipient(&recipient);
+        assert_eq!(streams.len(), 0);
+    }
+
+    #[test]
+    fn test_get_streams_by_sender_single() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+
+        let streams = client.get_streams_by_sender(&sender);
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams.get(0).unwrap(), stream_id);
+    }
+
+    #[test]
+    fn test_get_streams_by_recipient_single() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+
+        let streams = client.get_streams_by_recipient(&recipient);
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams.get(0).unwrap(), stream_id);
+    }
+
+    #[test]
+    fn test_get_streams_by_sender_multiple() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient1 = Address::generate(&env);
+        let recipient2 = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender, &10_000_000i128);
+
+        let stream_id1 = client.create_stream(&sender, &token_id, &recipient1, &100, &1000);
+        let stream_id2 = client.create_stream(&sender, &token_id, &recipient2, &50, &800);
+
+        let streams = client.get_streams_by_sender(&sender);
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams.get(0).unwrap(), stream_id1);
+        assert_eq!(streams.get(1).unwrap(), stream_id2);
+    }
+
+    #[test]
+    fn test_get_streams_by_recipient_multiple() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender1 = Address::generate(&env);
+        let sender2 = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender1, &10_000_000i128);
+        sac.mint(&sender2, &10_000_000i128);
+
+        let stream_id1 = client.create_stream(&sender1, &token_id, &recipient, &100, &1000);
+        let stream_id2 = client.create_stream(&sender2, &token_id, &recipient, &50, &800);
+
+        let streams = client.get_streams_by_recipient(&recipient);
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams.get(0).unwrap(), stream_id1);
+        assert_eq!(streams.get(1).unwrap(), stream_id2);
+    }
+
+    #[test]
+    fn test_get_streams_isolation_between_users() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender1 = Address::generate(&env);
+        let sender2 = Address::generate(&env);
+        let recipient1 = Address::generate(&env);
+        let recipient2 = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let sac = StellarAssetClient::new(&env, &token_id);
+        sac.mint(&sender1, &10_000_000i128);
+        sac.mint(&sender2, &10_000_000i128);
+
+        let stream_id1 = client.create_stream(&sender1, &token_id, &recipient1, &100, &1000);
+        let stream_id2 = client.create_stream(&sender2, &token_id, &recipient2, &50, &800);
+
+        // Verify sender1 only sees their stream
+        let sender1_streams = client.get_streams_by_sender(&sender1);
+        assert_eq!(sender1_streams.len(), 1);
+        assert_eq!(sender1_streams.get(0).unwrap(), stream_id1);
+
+        // Verify sender2 only sees their stream
+        let sender2_streams = client.get_streams_by_sender(&sender2);
+        assert_eq!(sender2_streams.len(), 1);
+        assert_eq!(sender2_streams.get(0).unwrap(), stream_id2);
+
+        // Verify recipient1 only sees their stream
+        let recipient1_streams = client.get_streams_by_recipient(&recipient1);
+        assert_eq!(recipient1_streams.len(), 1);
+        assert_eq!(recipient1_streams.get(0).unwrap(), stream_id1);
+
+        // Verify recipient2 only sees their stream
+        let recipient2_streams = client.get_streams_by_recipient(&recipient2);
+        assert_eq!(recipient2_streams.len(), 1);
+        assert_eq!(recipient2_streams.get(0).unwrap(), stream_id2);
     }
 }
