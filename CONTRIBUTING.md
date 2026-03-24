@@ -188,6 +188,70 @@ This must produce zero warnings.
 
 ---
 
+## Pre-Commit Hook (Optional but Recommended)
+
+A pre-commit hook can automatically check formatting and linting before each commit, catching issues early and saving CI time.
+
+### Setting Up the Hook
+
+**Quick Setup** (using the provided template):
+
+```bash
+cp scripts/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+**Manual Setup**:
+
+1. Create the hook file:
+
+```bash
+touch .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+2. Add the following script to `.git/hooks/pre-commit`:
+
+```bash
+#!/bin/bash
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "Checking code formatting..."
+if ! cargo fmt --all -- --check; then
+    echo "❌ Code formatting check failed. Run 'cargo fmt --all' to fix."
+    exit 1
+fi
+
+# Run clippy
+echo "Running clippy..."
+if ! cargo clippy --all-targets -- -D warnings; then
+    echo "❌ Clippy found issues. Fix them before committing."
+    exit 1
+fi
+
+# Run tests (optional - can be slow for large projects)
+# Uncomment the following lines if you want to run tests before each commit:
+# echo "Running tests..."
+# if ! cargo test --workspace; then
+#     echo "❌ Tests failed. Fix them before committing."
+#     exit 1
+# fi
+
+echo "✅ All pre-commit checks passed!"
+exit 0
+```
+
+### Notes
+
+- The hook is **optional** but highly recommended to catch issues before pushing
+- If you need to bypass the hook in an emergency, use `git commit --no-verify`
+- The test step is commented out by default since it can be slow; uncomment if desired
+- Each contributor must set up the hook individually (hooks are not tracked by git)
+
+---
+
 ## Pull Request Process
 
 1. Fork the repository and create a feature branch off `main`.
