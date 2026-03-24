@@ -33,6 +33,7 @@ Pay-per-second token streams. Ideal for payroll, subscriptions, or real-time con
 
 * **Key Function:** `create_stream(sender, token, recipient, rate_per_second, duration_seconds)`
 * **Action:** `withdraw(stream_id)` allows the recipient to pull accrued tokens at any time.
+* **Pause/Resume:** `pause_stream(stream_id)` and `resume_stream(stream_id)` allow senders to temporarily halt or restart token accrual.
 
 ### forge-multisig
 An N-of-M treasury requiring multiple owner approvals before funds move. Essential for DAO treasuries.

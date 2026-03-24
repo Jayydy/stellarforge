@@ -39,6 +39,12 @@ pub struct Stream {
     pub withdrawn: i128,
     /// Whether the stream has been cancelled
     pub cancelled: bool,
+    /// Whether the stream is currently paused
+    pub is_paused: bool,
+    /// Timestamp when stream was last paused (if paused)
+    pub paused_at: u64,
+    /// Total seconds the stream has been paused
+    pub total_paused_time: u64,
 }
 
 #[contracttype]
@@ -51,6 +57,7 @@ pub struct StreamStatus {
     pub remaining: i128,
     pub is_active: bool,
     pub is_finished: bool,
+    pub is_paused: bool,
 }
 
 #[contracterror]
@@ -135,6 +142,9 @@ impl ForgeStream {
             end_time: now + duration_seconds,
             withdrawn: 0,
             cancelled: false,
+            is_paused: false,
+            paused_at: 0,
+            total_paused_time: 0,
         };
 
         env.storage()
@@ -293,6 +303,113 @@ impl ForgeStream {
         Ok(())
     }
 
+    /// Pause an active stream.
+    ///
+    /// Temporarily halts token accrual. Recipient can still withdraw already-accrued tokens.
+    /// Only callable by the stream's `sender`.
+    ///
+    /// # Parameters
+    /// - `stream_id`: u64 stream identifier
+    ///
+    /// # Returns
+    /// `Ok(())`
+    ///
+    /// # Errors
+    /// - `StreamNotFound`
+    /// - `Unauthorized` (not sender)
+    /// - `AlreadyCancelled`
+    /// - `StreamFinished`
+    /// - `InvalidConfig` (already paused)
+    pub fn pause_stream(env: Env, stream_id: u64) -> Result<(), StreamError> {
+        let mut stream: Stream = env
+            .storage()
+            .instance()
+            .get(&DataKey::Stream(stream_id))
+            .ok_or(StreamError::StreamNotFound)?;
+
+        if stream.cancelled {
+            return Err(StreamError::AlreadyCancelled);
+        }
+
+        if env.ledger().timestamp() >= stream.end_time {
+            return Err(StreamError::StreamFinished);
+        }
+
+        if stream.is_paused {
+            return Err(StreamError::InvalidConfig); // Already paused
+        }
+
+        stream.sender.require_auth();
+
+        let now = env.ledger().timestamp();
+        stream.is_paused = true;
+        stream.paused_at = now;
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (Symbol::new(&env, "stream_paused"),),
+            (stream_id,),
+        );
+
+        Ok(())
+    }
+
+    /// Resume a paused stream.
+    ///
+    /// Restarts token accrual from the point it was paused. Only callable by the stream's `sender`.
+    ///
+    /// # Parameters
+    /// - `stream_id`: u64 stream identifier
+    ///
+    /// # Returns
+    /// `Ok(())`
+    ///
+    /// # Errors
+    /// - `StreamNotFound`
+    /// - `Unauthorized` (not sender)
+    /// - `AlreadyCancelled`
+    /// - `StreamFinished`
+    /// - `InvalidConfig` (not paused)
+    pub fn resume_stream(env: Env, stream_id: u64) -> Result<(), StreamError> {
+        let mut stream: Stream = env
+            .storage()
+            .instance()
+            .get(&DataKey::Stream(stream_id))
+            .ok_or(StreamError::StreamNotFound)?;
+
+        if stream.cancelled {
+            return Err(StreamError::AlreadyCancelled);
+        }
+
+        if env.ledger().timestamp() >= stream.end_time {
+            return Err(StreamError::StreamFinished);
+        }
+
+        if !stream.is_paused {
+            return Err(StreamError::InvalidConfig); // Not paused
+        }
+
+        stream.sender.require_auth();
+
+        let now = env.ledger().timestamp();
+        stream.total_paused_time += now.saturating_sub(stream.paused_at);
+        stream.is_paused = false;
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (Symbol::new(&env, "stream_resumed"),),
+            (stream_id,),
+        );
+
+        Ok(())
+    }
+
     /// Get real-time status of a stream without modifying it.
     ///
     /// Computes current `streamed`, `withdrawable`, `remaining` based on ledger timestamp.
@@ -328,7 +445,7 @@ impl ForgeStream {
         let withdrawable = (streamed - stream.withdrawn).max(0);
         let total = stream.rate_per_second * (stream.end_time - stream.start_time) as i128;
         let remaining = (total - streamed).max(0);
-        let is_active = !stream.cancelled && now < stream.end_time;
+        let is_active = !stream.cancelled && !stream.is_paused && now < stream.end_time;
         let is_finished = now >= stream.end_time;
 
         Ok(StreamStatus {
@@ -339,6 +456,7 @@ impl ForgeStream {
             remaining,
             is_active,
             is_finished,
+            is_paused: stream.is_paused,
         })
     }
 
@@ -375,8 +493,13 @@ impl ForgeStream {
             return stream.withdrawn;
         }
         let effective_time = now.min(stream.end_time);
-        let elapsed = effective_time.saturating_sub(stream.start_time);
-        stream.rate_per_second * elapsed as i128
+        let raw_elapsed = effective_time.saturating_sub(stream.start_time);
+        let mut paused_time = stream.total_paused_time;
+        if stream.is_paused {
+            paused_time += effective_time.saturating_sub(stream.paused_at);
+        }
+        let effective_elapsed = raw_elapsed.saturating_sub(paused_time);
+        stream.rate_per_second * effective_elapsed as i128
     }
 }
 
@@ -496,6 +619,115 @@ mod tests {
         assert!(status.is_finished);
         assert!(!status.is_active);
         assert_eq!(status.streamed, 100_000); // 100 * 1000s = full amount
+    }
+
+    #[test]
+    fn test_pause_stream() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ForgeStream, ());
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+
+        client.pause_stream(&stream_id);
+
+        let status = client.get_stream_status(&stream_id).unwrap();
+        assert!(status.is_paused);
+        assert!(!status.is_active);
+        assert_eq!(status.streamed, 10_000); // 100 * 100s
+    }
+
+    #[test]
+    fn test_resume_stream() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ForgeStream, ());
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+
+        client.pause_stream(&stream_id);
+        env.ledger().with_mut(|l| l.timestamp += 200); // Paused for 200s
+
+        let status_before = client.get_stream_status(&stream_id).unwrap();
+        assert!(status_before.is_paused);
+        assert_eq!(status_before.streamed, 10_000); // Still 100*100, no accrual during pause
+
+        client.resume_stream(&stream_id);
+
+        let status_after = client.get_stream_status(&stream_id).unwrap();
+        assert!(!status_after.is_paused);
+        assert!(status_after.is_active);
+        assert_eq!(status_after.streamed, 10_000); // Still the same
+    }
+
+    #[test]
+    fn test_withdraw_while_paused() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ForgeStream, ());
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+
+        client.pause_stream(&stream_id);
+        env.ledger().with_mut(|l| l.timestamp += 50); // Paused, no new accrual
+
+        let status = client.get_stream_status(&stream_id).unwrap();
+        assert_eq!(status.withdrawable, 10_000);
+
+        let withdrawn = client.withdraw(&stream_id);
+        assert_eq!(withdrawn, 10_000);
+
+        let status_after = client.get_stream_status(&stream_id).unwrap();
+        assert_eq!(status_after.withdrawn, 10_000);
+        assert_eq!(status_after.withdrawable, 0);
+    }
+
+    #[test]
+    fn test_pause_already_paused() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ForgeStream, ());
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        client.pause_stream(&stream_id);
+
+        let result = client.try_pause_stream(&stream_id);
+        assert_eq!(result, Err(Ok(StreamError::InvalidConfig)));
+    }
+
+    #[test]
+    fn test_resume_not_paused() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ForgeStream, ());
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = Address::generate(&env);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+
+        let result = client.try_resume_stream(&stream_id);
+        assert_eq!(result, Err(Ok(StreamError::InvalidConfig)));
     }
 }
 
