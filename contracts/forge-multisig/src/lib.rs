@@ -181,6 +181,13 @@ impl MultisigContract {
         let mut approvals = Vec::new(&env);
         approvals.push_back(proposer.clone());
 
+        let threshold: u32 = env.storage().instance().get(&DataKey::Threshold).unwrap();
+        let approved_at = if approvals.len() >= threshold {
+            Some(env.ledger().timestamp())
+        } else {
+            None
+        };
+
         let proposal = Proposal {
             proposer,
             to,
@@ -188,7 +195,7 @@ impl MultisigContract {
             amount,
             approvals,
             rejections: Vec::new(&env),
-            approved_at: None,
+            approved_at,
             executed: false,
             cancelled: false,
         };
@@ -932,6 +939,105 @@ mod tests {
         assert!(owners.contains(&o3));
     }
 
+    // ── 1-of-N threshold tests ─────────────────────────────────────────────────
+    //
+    // A threshold of 1 means any single owner can unilaterally authorize a
+    // treasury transfer. This is a valid but high-risk configuration — useful for
+    // hot wallets or automated systems where speed matters more than consensus.
+    // It must be fully supported for flexible treasury management.
+
+    /// Helper: 1-of-3 multisig with a 3600 s timelock and a funded token.
+    fn setup_1of3_funded<'a>(
+        env: &'a Env,
+    ) -> (MultisigContractClient<'a>, Address, Address, Address, Address, Address) {
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(env, &contract_id);
+        let o1 = Address::generate(env);
+        let o2 = Address::generate(env);
+        let o3 = Address::generate(env);
+        client.initialize(&vec![env, o1.clone(), o2.clone(), o3.clone()], &1, &3600);
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(env))
+            .address();
+        soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &1000);
+        let recipient = Address::generate(env);
+        (client, o1, o2, o3, token_id, recipient)
+    }
+
+    /// TC1 — Single approval flow: proposer's own approval meets threshold=1,
+    /// proposal is ready after timelock elapses.
+    #[test]
+    fn test_threshold_1_single_approval_flow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        let (client, o1, _, o3, token_id, recipient) = setup_1of3_funded(&env);
+
+        // propose auto-approves for proposer — threshold=1 is immediately met
+        let pid = client.propose(&o1, &recipient, &token_id, &100);
+        let proposal = client.get_proposal(&pid).unwrap();
+        assert_eq!(proposal.approvals.len(), 1);
+        assert!(proposal.approved_at.is_some()); // threshold reached at proposal time
+
+        // advance past timelock and execute
+        env.ledger().with_mut(|l| l.timestamp = 3601);
+        client.execute(&o3, &pid);
+        assert!(client.get_proposal(&pid).unwrap().executed);
+    }
+
+    /// TC2 — Inter-owner independence: Owner B's approved proposal cannot be
+    /// blocked by Owner C rejecting after threshold is already met.
+    #[test]
+    fn test_threshold_1_rejection_cannot_block_approved_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        let (client, _, o2, o3, token_id, recipient) = setup_1of3_funded(&env);
+
+        // o2 proposes — threshold=1 met immediately via auto-approval
+        let pid = client.propose(&o2, &recipient, &token_id, &100);
+        assert!(client.get_proposal(&pid).unwrap().approved_at.is_some());
+
+        // o3 tries to reject — already voted check: o3 hasn't voted, so rejection
+        // is recorded, but approved_at is already set and cannot be unset
+        client.reject(&o3, &pid);
+        let proposal = client.get_proposal(&pid).unwrap();
+        assert!(proposal.approved_at.is_some()); // still approved
+        assert_eq!(proposal.rejections.len(), 1);
+
+        // execution still succeeds after timelock
+        env.ledger().with_mut(|l| l.timestamp = 3601);
+        client.execute(&o3, &pid);
+        assert!(client.get_proposal(&pid).unwrap().executed);
+    }
+
+    /// TC3 — Immediate threshold check: get_proposal returns approvals=1 right
+    /// after propose(), confirming threshold=1 is satisfied by the proposer alone.
+    #[test]
+    fn test_threshold_1_immediate_approval_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, o1, _, _, token_id, recipient) = setup_1of3_funded(&env);
+
+        let pid = client.propose(&o1, &recipient, &token_id, &100);
+        assert_eq!(client.get_approval_count(&pid), 1);
+        assert_eq!(client.get_threshold(), 1);
+    }
+
+    /// Non-owner cannot provide the single required signature.
+    #[test]
+    fn test_threshold_1_non_owner_cannot_propose() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (client, _, _, _, token_id, recipient) = setup_1of3_funded(&env);
+        let non_owner = Address::generate(&env);
+
+        let result = client.try_propose(&non_owner, &recipient, &token_id, &100);
+        assert_eq!(result, Err(Ok(MultisigError::Unauthorized)));
     // ── Non-owner propose() rejection ─────────────────────────────────────────
 
     #[test]
