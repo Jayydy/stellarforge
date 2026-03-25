@@ -127,6 +127,53 @@ PRs welcome. Please ensure:
 
 ---
 
+<!-- WASM-SIZES-START -->
+## ⚙️ WASM Binary Sizes
+
+> Sizes are in bytes. Run `./scripts/update-wasm-sizes.sh` to regenerate after rebuilding contracts.
+
+| Contract | WASM Size (bytes) | WASM Size (optimized) |
+| :--- | ---: | ---: |
+| `forge-governor` | — | — |
+| `forge-multisig` | — | — |
+| `forge-oracle` | — | — |
+| `forge-stream` | — | — |
+| `forge-vesting` | — | — |
+
+> Run `./scripts/update-wasm-sizes.sh` after building to populate these values.
+
+### Optimizing with wasm-opt
+
+`wasm-opt` is part of the [Binaryen](https://github.com/WebAssembly/binaryen) toolchain.
+The `-Oz` flag instructs the optimizer to minimize binary size as aggressively as possible,
+trading compilation time for the smallest possible output.
+
+#### Install wasm-opt
+
+```bash
+# macOS (Homebrew)
+brew install binaryen
+
+# npm (cross-platform)
+npm install -g binaryen
+
+# Direct binary download
+# https://github.com/WebAssembly/binaryen/releases
+```
+
+#### Run optimization
+
+```bash
+wasm-opt -Oz \
+  target/wasm32v1-none/release/forge_governor.wasm \
+  -o target/wasm32v1-none/release/forge_governor.wasm
+```
+
+Replace `forge_governor` with the snake_case name of the contract you want to optimize.
+<!-- WASM-SIZES-END -->
+
+---
+
 ## License
 
 MIT
