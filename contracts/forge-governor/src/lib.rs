@@ -722,11 +722,13 @@ mod tests {
             &String::from_str(&env, "desc"),
         );
 
+        // Cast votes that exactly meet quorum (60 + 40 = 100)
         let voter1 = Address::generate(&env);
         let voter2 = Address::generate(&env);
         client.vote(&voter1, &pid, &true, &60);
         client.vote(&voter2, &pid, &true, &40);
 
+        // Finalize after the voting period and verify it passes.
         env.ledger().with_mut(|l| l.timestamp = 5000);
         let state = client.finalize(&pid);
         assert_eq!(state, ProposalState::Passed);
@@ -738,11 +740,13 @@ mod tests {
             &String::from_str(&env, "desc"),
         );
 
+        // Cast votes just below quorum (60 + 39 = 99)
         let voter3 = Address::generate(&env);
         let voter4 = Address::generate(&env);
         client.vote(&voter3, &pid2, &true, &60);
         client.vote(&voter4, &pid2, &true, &39);
 
+        // Finalize after the voting period and verify it fails.
         env.ledger().with_mut(|l| l.timestamp = 6000);
         let state2 = client.finalize(&pid2);
         assert_eq!(state2, ProposalState::Failed);
