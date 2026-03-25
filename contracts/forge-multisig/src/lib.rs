@@ -802,6 +802,97 @@ mod tests {
         assert!(!proposal_after.executed);
     }
 
+    // ── Timelock enforcement tests ────────────────────────────────────────────
+    //
+    // The timelock acts as a "cooling-off" period: even after enough owners have
+    // approved a proposal, funds cannot move until the configured delay has fully
+    // elapsed. This gives remaining owners (or the broader community) time to
+    // detect and react to a compromised key or a rushed decision before it is
+    // too late.
+
+    /// Helper: set up a 2-of-3 multisig with a custom timelock and a funded token.
+    /// Returns (client, [o1, o2, o3], token_id, recipient, contract_id).
+    fn setup_funded<'a>(
+        env: &'a Env,
+        timelock_delay: u64,
+    ) -> (
+        MultisigContractClient<'a>,
+        [Address; 3],
+        Address,
+        Address,
+        Address,
+    ) {
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(env, &contract_id);
+        let o1 = Address::generate(env);
+        let o2 = Address::generate(env);
+        let o3 = Address::generate(env);
+        client.initialize(&vec![env, o1.clone(), o2.clone(), o3.clone()], &2, &timelock_delay);
+
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(env))
+            .address();
+        soroban_sdk::token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &1000);
+        let recipient = Address::generate(env);
+
+        (client, [o1, o2, o3], token_id, recipient, contract_id)
+    }
+
+    /// TC1 — Premature execution (T+23 h) must revert with TimelockNotElapsed.
+    #[test]
+    fn test_timelock_premature_execution_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        const DELAY: u64 = 86_400; // 24 h
+        let (client, [o1, o2, o3], token_id, recipient, _) = setup_funded(&env, DELAY);
+
+        let pid = client.propose(&o1, &recipient, &token_id, &100);
+        client.approve(&o2, &pid); // threshold reached at T=0
+
+        // Advance to T+23 h — one hour short of the required delay
+        env.ledger().with_mut(|l| l.timestamp = DELAY - 3_600);
+        let result = client.try_execute(&o3, &pid);
+        assert_eq!(result, Err(Ok(MultisigError::TimelockNotElapsed)));
+    }
+
+    /// TC2 — Execution at exactly T+24 h+1 s must succeed and mark the proposal executed.
+    #[test]
+    fn test_timelock_exact_boundary_execution_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        const DELAY: u64 = 86_400; // 24 h
+        let (client, [o1, o2, o3], token_id, recipient, _) = setup_funded(&env, DELAY);
+
+        let pid = client.propose(&o1, &recipient, &token_id, &100);
+        client.approve(&o2, &pid); // threshold reached at T=0
+
+        // Advance to T+24 h+1 s — just past the boundary
+        env.ledger().with_mut(|l| l.timestamp = DELAY + 1);
+        client.execute(&o3, &pid);
+
+        assert!(client.get_proposal(&pid).unwrap().executed);
+    }
+
+    /// TC3 — Zero-delay timelock: execute() must succeed immediately after threshold is met.
+    #[test]
+    fn test_timelock_zero_delay_executes_immediately() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+        let (client, [o1, o2, o3], token_id, recipient, _) = setup_funded(&env, 0);
+
+        let pid = client.propose(&o1, &recipient, &token_id, &100);
+        client.approve(&o2, &pid); // threshold reached — no time advance needed
+
+        client.execute(&o3, &pid);
+        assert!(client.get_proposal(&pid).unwrap().executed);
+    }
+
     #[test]
     fn test_is_owner_returns_true_for_owner() {
         let env = Env::default();
