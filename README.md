@@ -19,6 +19,35 @@ Developers evaluating StellarForge can use this table to quickly identify the ri
 
 ---
 
+## 🔒 Audit Status
+
+**Current Status: UNAUDITED**
+
+None of the StellarForge contracts have been formally audited as of this release. While these contracts are designed with security best practices and include comprehensive test coverage, they have not undergone independent security review.
+
+### Contract Audit Status
+
+| Contract | Audit Status | Last Updated | Notes |
+| :--- | :--- | :--- | :--- |
+| `forge-governor` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-multisig` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-oracle` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-stream` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-vesting` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+
+### ⚠️ Production Use Disclaimer
+
+**IMPORTANT:** These contracts are provided as-is for educational and development purposes. Before using in production:
+
+1. **Conduct your own security audit** or engage a professional auditing firm
+2. **Test extensively** on testnet with realistic scenarios
+3. **Review the code** thoroughly for your specific use case
+4. **Consider the risks** of unaudited smart contracts, including potential loss of funds
+
+We are committed to obtaining formal audits before recommending production deployment. This section will be updated when audits are completed.
+
+---
+
 ## 🏭 Real World Use Cases
 
 - `forge-vesting`: Issue employee token grants with a one-year cliff and multi-year linear vesting so early hires are rewarded for long-term commitment, while investor lockups enforce even longer vesting before secondary-market liquidity.
@@ -173,6 +202,28 @@ cargo test -p forge-multisig
 cargo test -p forge-governor
 cargo test -p forge-oracle
 ```
+
+---
+
+## 🚀 Testnet Deployment
+
+Ready to experiment with StellarForge contracts? We've deployed all contracts to Stellar testnet for easy testing and evaluation.
+
+**Quick Start:**
+```bash
+# Example: Query a price from the oracle
+stellar contract invoke \
+  --id CDLZFC3SYJYDZT7K67VZ7SHPY775YXK4XZ4Z4Z4Z4Z4Z4Z4Z4Z4Z6 \
+  --network testnet \
+  -- \
+  get_price --base XLM --quote USDC
+```
+
+See [`docs/testnet.md`](docs/testnet.md) for:
+- Deployed contract addresses
+- Network configuration (passphrase, RPC URL)
+- Example commands for each contract
+- Instructions for deploying your own instances
 
 ---
 

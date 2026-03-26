@@ -262,7 +262,8 @@ exit 0
    - `cargo test --workspace` — all tests pass
 4. Open a PR against `main`. Your PR description must summarise what changed and why.
 5. If your PR introduces a new contract or public API, include tests covering error paths and state transitions.
-6. At least one maintainer approval is required before a PR is merged.
+6. **Breaking Changes:** If your PR introduces breaking changes (see [Versioning](README.md#-versioning)), you **must** include a migration guide. Use the template in [`docs/migrations/TEMPLATE.md`](docs/migrations/TEMPLATE.md) and place the guide in the `docs/migrations/` directory.
+7. At least one maintainer approval is required before a PR is merged.
 
 ---
 
