@@ -44,6 +44,8 @@ pub struct Stream {
     pub withdrawn: i128,
     /// Whether the stream has been cancelled
     pub cancelled: bool,
+    /// Amount streamed at the time of cancellation (if cancelled)
+    pub streamed_at_cancel: i128,
     /// Whether the stream is currently paused
     pub is_paused: bool,
     /// Timestamp when stream was last paused (if paused)
@@ -149,6 +151,7 @@ impl ForgeStream {
             end_time: now + duration_seconds,
             withdrawn: 0,
             cancelled: false,
+            streamed_at_cancel: 0,
             is_paused: false,
             paused_at: 0,
             total_paused_time: 0,
@@ -315,6 +318,7 @@ impl ForgeStream {
         }
 
         stream.cancelled = true;
+        stream.streamed_at_cancel = streamed;
         env.storage()
             .instance()
             .set(&DataKey::Stream(stream_id), &stream);
@@ -637,7 +641,7 @@ impl ForgeStream {
 
     fn compute_streamed(stream: &Stream, now: u64) -> i128 {
         if stream.cancelled {
-            return stream.withdrawn;
+            return stream.streamed_at_cancel;
         }
         let effective_time = now.min(stream.end_time);
         let raw_elapsed = effective_time.saturating_sub(stream.start_time);
@@ -1555,5 +1559,39 @@ mod tests {
         let recipient2_streams = client.get_streams_by_recipient(&recipient2);
         assert_eq!(recipient2_streams.len(), 1);
         assert_eq!(recipient2_streams.get(0).unwrap(), stream_id2);
+    }
+}
+
+    /// Test that get_stream_status().streamed returns the correct historical value after cancel.
+    /// This verifies that streamed_at_cancel is properly stored and returned.
+    #[test]
+    fn test_get_stream_status_streamed_after_cancel() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin).address();
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
+
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+        
+        // Advance time to 200 seconds
+        env.ledger().with_mut(|l| l.timestamp += 200);
+        
+        // At this point, streamed should be 100 * 200 = 20,000
+        let status_before = client.get_stream_status(&stream_id);
+        assert_eq!(status_before.streamed, 20_000);
+        
+        // Cancel the stream
+        client.cancel_stream(&stream_id);
+        
+        // After cancel, get_stream_status().streamed should still return 20,000 (the amount at cancel time)
+        let status_after = client.get_stream_status(&stream_id);
+        assert_eq!(status_after.streamed, 20_000, "streamed should equal the amount at cancel time");
+        assert_eq!(status_after.withdrawable, 0, "withdrawable should be 0 after cancel");
     }
 }
