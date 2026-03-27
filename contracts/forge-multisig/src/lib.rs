@@ -989,6 +989,35 @@ mod tests {
         assert!(owners.contains(&o3));
     }
 
+    /// Test that get_owner_list() and get_owners() return identical results.
+    /// get_owner_list() is documented as an alias for get_owners() and simply delegates to it.
+    /// This test verifies the delegation is correct and both functions return identical results.
+    #[test]
+    fn test_get_owner_list_and_get_owners_return_identical_results() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, o1, o2, o3) = setup_2of3(&env);
+
+        let owners = client.get_owners();
+        let owner_list = client.get_owner_list();
+
+        // Assert same length
+        assert_eq!(owners.len(), owner_list.len());
+
+        // Assert same elements in same order
+        for i in 0..owners.len() {
+            assert_eq!(owners.get(i).unwrap(), owner_list.get(i).unwrap());
+        }
+
+        // Assert all expected owners are present
+        assert!(owners.contains(&o1));
+        assert!(owners.contains(&o2));
+        assert!(owners.contains(&o3));
+        assert!(owner_list.contains(&o1));
+        assert!(owner_list.contains(&o2));
+        assert!(owner_list.contains(&o3));
+    }
+
     // ── 1-of-N threshold tests ─────────────────────────────────────────────────
     //
     // A threshold of 1 means any single owner can unilaterally authorize a
