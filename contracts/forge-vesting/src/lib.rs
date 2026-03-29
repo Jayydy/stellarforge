@@ -943,6 +943,52 @@ mod tests {
         assert_eq!(status.vested, 1_000_000);
     }
 
+    /// Verifies get_status() reflects correct state across two partial claims.
+    ///
+    /// Timeline (total=10_000, cliff=0, duration=1000):
+    /// - t=200: vested=2_000, claimed=0, claimable=2_000
+    /// - claim() at t=200
+    /// - t=200: vested=2_000, claimed=2_000, claimable=0
+    /// - t=500: vested=5_000, claimed=2_000, claimable=3_000
+    /// - claim() at t=500
+    /// - t=500: vested=5_000, claimed=5_000, claimable=0
+    #[test]
+    fn test_get_status_after_partial_claim_then_time_advance() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &10_000, &0, &1000);
+
+        // t=200: 20% vested, nothing claimed yet
+        env.ledger().with_mut(|l| l.timestamp = 200);
+        let s = client.get_status();
+        assert_eq!(s.vested, 2_000);
+        assert_eq!(s.claimed, 0);
+        assert_eq!(s.claimable, 2_000);
+
+        client.claim();
+
+        // immediately after claim: claimable drains to 0
+        let s = client.get_status();
+        assert_eq!(s.vested, 2_000);
+        assert_eq!(s.claimed, 2_000);
+        assert_eq!(s.claimable, 0);
+
+        // t=500: 50% vested, only the new 3_000 is claimable
+        env.ledger().with_mut(|l| l.timestamp = 500);
+        let s = client.get_status();
+        assert_eq!(s.vested, 5_000);
+        assert_eq!(s.claimed, 2_000);
+        assert_eq!(s.claimable, 3_000);
+
+        client.claim();
+
+        // after second claim: claimed accumulates, claimable is 0 again
+        let s = client.get_status();
+        assert_eq!(s.claimed, 5_000);
+        assert_eq!(s.claimable, 0);
+    }
+
     fn setup_with_token() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
