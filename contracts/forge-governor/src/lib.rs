@@ -10,7 +10,7 @@
 //! - Timelock between approval and execution
 //! - Anyone can propose; execution is permissionless once passed
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, String, Symbol, Vec};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -20,6 +20,7 @@ pub enum DataKey {
     Proposal(u64),
     Vote(u64, Address),
     NextProposalId,
+    ActiveProposals,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -47,6 +48,18 @@ pub enum ProposalState {
     Failed,
     Executed,
     Cancelled,
+}
+
+/// Vote tally for a proposal.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoteTally {
+    /// Total votes cast in favor.
+    pub yes_votes: i128,
+    /// Total votes cast against.
+    pub no_votes: i128,
+    /// Sum of yes and no votes.
+    pub total_votes: i128,
 }
 
 /// A governance proposal.
@@ -90,6 +103,9 @@ pub enum GovernorError {
     AlreadyExecuted = 10,
     AlreadyCancelled = 11,
     InvalidConfig = 12,
+    InvalidWeight = 13,
+    Unauthorized = 14,
+    AlreadyFinalized = 15,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -180,12 +196,12 @@ impl GovernorContract {
         let now = env.ledger().timestamp();
         let proposal_id: u64 = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::NextProposalId)
             .unwrap_or(0u64);
 
         let proposal = Proposal {
-            proposer,
+            proposer: proposer.clone(),
             title,
             description,
             vote_start: now,
@@ -200,9 +216,25 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::NextProposalId, &(proposal_id + 1));
         env.storage().instance().extend_ttl(17280, 34560);
+
+        // Track active proposal ID for O(1) get_pending_proposals
+        let mut active: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveProposals)
+            .unwrap_or_else(|| Vec::new(&env));
+        active.push_back(proposal_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::ActiveProposals, &active);
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_created"),),
+            (proposal_id, &proposer, proposal.vote_end),
+        );
 
         Ok(proposal_id)
     }
@@ -217,7 +249,7 @@ impl GovernorContract {
     /// - `voter` — Address casting the vote.
     /// - `proposal_id` — ID of the proposal to vote on.
     /// - `support` — `true` to vote in favor, `false` to vote against.
-    /// - `weight` — Voting power to apply, typically the voter's token balance.
+    /// - `weight` — Voting power to apply, must be <= the voter's actual token balance.
     ///
     /// # Returns
     /// `Ok(())` on success.
@@ -262,6 +294,23 @@ impl GovernorContract {
             return Err(GovernorError::VotingClosed);
         }
 
+        if weight <= 0 {
+            return Err(GovernorError::InvalidWeight);
+        }
+
+        let config: GovernorConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .ok_or(GovernorError::NotInitialized)?;
+
+        let token_client = token::Client::new(&env, &config.vote_token);
+        let actual_balance = token_client.balance(&voter);
+
+        if weight > actual_balance {
+            return Err(GovernorError::InvalidWeight);
+        }
+
         if support {
             proposal.votes_for += weight;
         } else {
@@ -273,6 +322,11 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().instance().extend_ttl(17280, 34560);
+
+        env.events().publish(
+            (Symbol::new(&env, "vote_cast"),),
+            (proposal_id, &voter, support, weight),
+        );
 
         Ok(())
     }
@@ -293,8 +347,8 @@ impl GovernorContract {
     /// # Errors
     /// - [`GovernorError::ProposalNotFound`] — No proposal exists with `proposal_id`.
     /// - [`GovernorError::VotingStillOpen`] — The voting period has not yet ended.
-    /// - [`GovernorError::AlreadyExecuted`] — The proposal has already been finalized
-    ///   or executed (state is not `Active`).
+    /// - [`GovernorError::AlreadyFinalized`] — The proposal has already been finalized
+    ///   (state is not `Active`).
     ///
     /// # Example
     /// ```text
@@ -310,7 +364,7 @@ impl GovernorContract {
             .ok_or(GovernorError::ProposalNotFound)?;
 
         if proposal.state != ProposalState::Active {
-            return Err(GovernorError::AlreadyExecuted);
+            return Err(GovernorError::AlreadyFinalized);
         }
 
         let now = env.ledger().timestamp();
@@ -338,6 +392,24 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().instance().extend_ttl(17280, 34560);
 
+        // Remove from active proposals list
+        let mut active: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveProposals)
+            .unwrap_or_else(|| Vec::new(&env));
+        if let Some(pos) = active.iter().position(|id| id == proposal_id) {
+            active.remove(pos as u32);
+            env.storage()
+                .instance()
+                .set(&DataKey::ActiveProposals, &active);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_finalized"),),
+            (proposal_id, proposal.votes_for, proposal.votes_against),
+        );
+
         Ok(state)
     }
 
@@ -358,7 +430,7 @@ impl GovernorContract {
     /// # Errors
     /// - [`GovernorError::ProposalNotFound`] — No proposal exists with `proposal_id`.
     /// - [`GovernorError::AlreadyExecuted`] — The proposal has already been executed.
-    /// - [`GovernorError::ProposalNotPassed`] — The proposal did not reach `Passed` state.
+    /// - [`GovernorError::ProposalNotPassed`] — The proposal did not reach `Passed` state or is cancelled.
     /// - [`GovernorError::TimelockNotElapsed`] — The timelock delay has not fully passed.
     ///
     /// # Example
@@ -377,6 +449,9 @@ impl GovernorContract {
 
         if proposal.state == ProposalState::Executed {
             return Err(GovernorError::AlreadyExecuted);
+        }
+        if proposal.state == ProposalState::Cancelled {
+            return Err(GovernorError::ProposalNotPassed);
         }
         if proposal.state != ProposalState::Passed {
             return Err(GovernorError::ProposalNotPassed);
@@ -400,6 +475,107 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().instance().extend_ttl(17280, 34560);
+
+        // Remove from active proposals list (in case finalize was skipped)
+        let mut active: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveProposals)
+            .unwrap_or_else(|| Vec::new(&env));
+        if let Some(pos) = active.iter().position(|id| id == proposal_id) {
+            active.remove(pos as u32);
+            env.storage()
+                .instance()
+                .set(&DataKey::ActiveProposals, &active);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_executed"),),
+            (proposal_id, &executor),
+        );
+
+        Ok(())
+    }
+
+    /// Cancel an active proposal before voting ends.
+    ///
+    /// Only the original proposer can cancel a proposal, and only while voting is still open
+    /// (state is `Active` and current timestamp <= `vote_end`). Cancelling a proposal removes
+    /// it from the active proposals list and prevents further voting or execution.
+    /// Requires authorization from `proposer`.
+    ///
+    /// # Parameters
+    /// - `proposer` — The original proposer address. Must match the proposal's proposer.
+    /// - `proposal_id` — ID of the proposal to cancel.
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// - [`GovernorError::ProposalNotFound`] — No proposal exists with `proposal_id`.
+    /// - [`GovernorError::Unauthorized`] — `proposer` is not the original proposal creator.
+    /// - [`GovernorError::VotingClosed`] — Voting period has ended or proposal is not in `Active` state.
+    /// - [`GovernorError::AlreadyCancelled`] — The proposal has already been cancelled.
+    ///
+    /// # Example
+    /// ```text
+    /// // Cancel a proposal before voting ends
+    /// client.cancel_proposal(&proposer, &proposal_id);
+    /// ```
+    pub fn cancel_proposal(
+        env: Env,
+        proposer: Address,
+        proposal_id: u64,
+    ) -> Result<(), GovernorError> {
+        proposer.require_auth();
+
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(GovernorError::ProposalNotFound)?;
+
+        // Only the original proposer can cancel
+        if proposal.proposer != proposer {
+            return Err(GovernorError::Unauthorized);
+        }
+
+        // Can only cancel if still in Active state
+        if proposal.state != ProposalState::Active {
+            if proposal.state == ProposalState::Cancelled {
+                return Err(GovernorError::AlreadyCancelled);
+            }
+            return Err(GovernorError::VotingClosed);
+        }
+
+        // Can only cancel while voting is still open
+        let now = env.ledger().timestamp();
+        if now > proposal.vote_end {
+            return Err(GovernorError::VotingClosed);
+        }
+
+        proposal.state = ProposalState::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        // Remove from active proposals list
+        let mut active: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ActiveProposals)
+            .unwrap_or_else(|| Vec::new(&env));
+        if let Some(pos) = active.iter().position(|id| id == proposal_id) {
+            active.remove(pos as u32);
+            env.storage()
+                .instance()
+                .set(&DataKey::ActiveProposals, &active);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_cancelled"),),
+            (proposal_id, &proposer),
+        );
 
         Ok(())
     }
@@ -463,7 +639,7 @@ impl GovernorContract {
     /// ```
     pub fn get_proposal_count(env: Env) -> u64 {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::NextProposalId)
             .unwrap_or(0u64)
     }
@@ -479,6 +655,7 @@ impl GovernorContract {
     ///
     /// # Returns
     /// `true` if `voter` has cast a vote on `proposal_id`, `false` otherwise.
+    /// Returns `false` for non-existent proposal IDs (no error is thrown).
     ///
     /// # Example
     /// ```text
@@ -490,6 +667,67 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .has(&DataKey::Vote(proposal_id, voter))
+    }
+
+    /// Return the current state of a proposal.
+    ///
+    /// Read-only; does not modify state. Lighter alternative to
+    /// [`get_proposal`](Self::get_proposal) when only the state is needed.
+    ///
+    /// # Parameters
+    /// - `proposal_id` — ID of the proposal to query.
+    ///
+    /// # Returns
+    /// `Ok(`[`ProposalState`]`)` — the proposal's current state.
+    ///
+    /// # Errors
+    /// - [`GovernorError::ProposalNotFound`] — No proposal exists with `proposal_id`.
+    ///
+    /// # Example
+    /// ```text
+    /// let state = client.get_proposal_state(&proposal_id)?;
+    /// assert_eq!(state, ProposalState::Active);
+    /// ```
+    pub fn get_proposal_state(env: Env, proposal_id: u64) -> Result<ProposalState, GovernorError> {
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(GovernorError::ProposalNotFound)?;
+        Ok(proposal.state)
+    }
+
+    /// Return the current vote tally for a proposal.
+    ///
+    /// Read-only; does not modify state. Returns a breakdown of yes, no, and
+    /// total votes cast so far, regardless of the proposal's current state.
+    ///
+    /// # Parameters
+    /// - `proposal_id` — ID of the proposal to query.
+    ///
+    /// # Returns
+    /// `Ok(`[`VoteTally`]`)` with the current vote counts.
+    ///
+    /// # Errors
+    /// - [`GovernorError::ProposalNotFound`] — No proposal exists with `proposal_id`.
+    ///
+    /// # Example
+    /// ```text
+    /// let tally = client.get_vote_tally(&proposal_id)?;
+    /// println!("yes: {}, no: {}, total: {}", tally.yes_votes, tally.no_votes, tally.total_votes);
+    /// ```
+    pub fn get_vote_tally(env: Env, proposal_id: u64) -> Result<VoteTally, GovernorError> {
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(GovernorError::ProposalNotFound)?;
+
+        Ok(VoteTally {
+            yes_votes: proposal.votes_for,
+            no_votes: proposal.votes_against,
+            total_votes: proposal.votes_for + proposal.votes_against,
+        })
     }
 
     /// Return the IDs of all proposals that are currently in the active voting period.
@@ -515,22 +753,23 @@ impl GovernorContract {
     /// }
     /// ```
     pub fn get_pending_proposals(env: Env) -> Vec<u64> {
-        let next_id: u64 = env
+        let active: Vec<u64> = env
             .storage()
             .instance()
-            .get(&DataKey::NextProposalId)
-            .unwrap_or(0u64);
+            .get(&DataKey::ActiveProposals)
+            .unwrap_or_else(|| Vec::new(&env));
 
         let now = env.ledger().timestamp();
         let mut pending = Vec::new(&env);
 
-        for id in 0..next_id {
+        for id in active.iter() {
             if let Some(proposal) = env
                 .storage()
                 .persistent()
                 .get::<DataKey, Proposal>(&DataKey::Proposal(id))
             {
-                if proposal.state == ProposalState::Active && now <= proposal.vote_end {
+                // Exclude cancelled proposals and expired voting windows
+                if proposal.state != ProposalState::Cancelled && now <= proposal.vote_end {
                     pending.push_back(id);
                 }
             }
@@ -554,7 +793,8 @@ mod tests {
     fn setup(env: &Env) -> GovernorContractClient<'_> {
         let contract_id = env.register_contract(None, GovernorContract);
         let client = GovernorContractClient::new(env, &contract_id);
-        let token = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let token = env.register_stellar_asset_contract(token_admin);
         let config = GovernorConfig {
             vote_token: token,
             voting_period: 3600,
@@ -580,11 +820,40 @@ mod tests {
             &String::from_str(&env, "Test Proposal"),
             &String::from_str(&env, "A test"),
         );
+        
+        let config = client.get_config().unwrap();
+        let token_client = token::Client::new(&env, &config.vote_token);
+        token_client.transfer(&token_client.address, &voter, &500);
+
         client.vote(&voter, &pid, &true, &200);
 
         env.ledger().with_mut(|l| l.timestamp = 5000);
         let state = client.finalize(&pid);
         assert_eq!(state, ProposalState::Passed);
+    }
+
+    #[test]
+    fn test_vote_with_excessive_weight_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "A test"),
+        );
+
+        let config = client.get_config().unwrap();
+        let token_client = token::Client::new(&env, &config.vote_token);
+        token_client.transfer(&token_client.address, &voter, &100);
+
+        // Try to vote with 200 weight when only 100 balance
+        let result = client.try_vote(&voter, &pid, &true, &200);
+        assert_eq!(result, Err(Ok(GovernorError::InvalidWeight)));
     }
 
     #[test]
@@ -666,6 +935,44 @@ mod tests {
         client.vote(&voter, &pid, &true, &100);
         let result = client.try_vote(&voter, &pid, &true, &100);
         assert_eq!(result, Err(Ok(GovernorError::AlreadyVoted)));
+    }
+
+    #[test]
+    fn test_vote_with_zero_weight_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "P"),
+            &String::from_str(&env, "D"),
+        );
+
+        let result = client.try_vote(&voter, &pid, &true, &0);
+        assert_eq!(result, Err(Ok(GovernorError::InvalidWeight)));
+    }
+
+    #[test]
+    fn test_vote_with_negative_weight_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "P"),
+            &String::from_str(&env, "D"),
+        );
+
+        let result = client.try_vote(&voter, &pid, &false, &-1000);
+        assert_eq!(result, Err(Ok(GovernorError::InvalidWeight)));
     }
 
     #[test]
@@ -762,7 +1069,8 @@ mod tests {
         client.vote(&voter4, &pid2, &true, &39);
 
         // Finalize after the voting period and verify it fails.
-        env.ledger().with_mut(|l| l.timestamp = 10000);
+        // pid2 was created at t=5000, so vote_end = 5000 + 3600 = 8600
+        env.ledger().with_mut(|l| l.timestamp = 9000);
         let state2 = client.finalize(&pid2);
         assert_eq!(state2, ProposalState::Failed);
     }
@@ -898,6 +1206,39 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_twice_reverts_with_already_executed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let executor = Address::generate(&env);
+
+        let pid = client.propose(&proposer, &String::from_str(&env, "P"), &String::from_str(&env, "D"));
+        client.vote(&voter, &pid, &true, &200);
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        client.finalize(&pid);
+
+        // Execute the proposal
+        env.ledger().with_mut(|l| l.timestamp = 5000 + 86400);
+        client.execute(&executor, &pid);
+
+        // Verify proposal state is Executed
+        let proposal = client.get_proposal(&pid);
+        assert_eq!(proposal.state, ProposalState::Executed);
+
+        // Try to execute again
+        let result = client.try_execute(&executor, &pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyExecuted)));
+
+        // Verify proposal state is still Executed
+        let proposal = client.get_proposal(&pid);
+        assert_eq!(proposal.state, ProposalState::Executed);
+    }
+
+    #[test]
     fn test_has_voted_returns_true_for_voter() {
         let env = Env::default();
         env.mock_all_auths();
@@ -951,6 +1292,22 @@ mod tests {
 
         // voter has voted
         assert!(client.has_voted(&pid, &voter));
+    }
+
+    #[test]
+    fn test_has_voted_returns_false_for_non_existent_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let voter = Address::generate(&env);
+
+        // Call has_voted with a proposal_id that was never created
+        let result = client.has_voted(&999, &voter);
+
+        // Should return false without throwing an error
+        assert!(!result);
     }
 
     #[test]
@@ -1059,76 +1416,626 @@ mod tests {
         assert_eq!(pending.get(1).unwrap(), pid2);
     }
 
-    // ── NotInitialized safety tests ───────────────────────────────────────────
+    // ── Tie-breaking behaviour ─────────────────────────────────────────────────
+    //
+    // The contract requires votes_for > votes_against (strict majority) to pass.
+    // When yes votes equal no votes the proposal resolves to Failed — there is
+    // no mechanism that breaks a tie in favour of the proposer or any other party.
+    // This is deterministic and must be explicitly tested.
 
-    /// finalize() must return NotInitialized (not panic) when DataKey::Config is
-    /// absent from instance storage — simulated by an uninitialized contract with
-    /// a manually injected proposal.
+    /// Equal yes and no votes that together meet quorum must resolve to Failed.
+    /// Tie-breaking rule: votes_for must be strictly greater than votes_against.
     #[test]
-    fn test_finalize_returns_not_initialized_when_config_missing() {
+    fn test_tied_vote_resolves_to_failed() {
         let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env); // quorum = 100, voting_period = 3600
 
-        // Register contract but do NOT call initialize()
-        let contract_id = env.register_contract(None, GovernorContract);
-        let client = GovernorContractClient::new(&env, &contract_id);
+        let proposer = Address::generate(&env);
+        let yes_voter = Address::generate(&env);
+        let no_voter = Address::generate(&env);
 
-        // Manually store a proposal that looks Active and past its vote_end
-        // so finalize() gets past the early guards and reaches the Config read.
-        let fake_proposal = Proposal {
-            proposer: Address::generate(&env),
-            title: String::from_str(&env, "T"),
-            description: String::from_str(&env, "D"),
-            vote_start: 0,
-            vote_end: 0, // already ended
-            votes_for: 1000,
-            votes_against: 0,
-            passed_at: None,
-            state: ProposalState::Active,
-        };
-        env.as_contract(&contract_id, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Proposal(0u64), &fake_proposal);
-        });
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Tied Proposal"),
+            &String::from_str(&env, "Equal yes and no votes"),
+        );
 
-        env.ledger().with_mut(|l| l.timestamp = 100);
-        let result = client.try_finalize(&0);
-        assert_eq!(result, Err(Ok(GovernorError::NotInitialized)));
+        // Cast equal weight on both sides — total = 200, meets quorum of 100
+        client.vote(&yes_voter, &pid, &true, &100);
+        client.vote(&no_voter, &pid, &false, &100);
+
+        // Advance past the voting period
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+
+        // Tie must resolve to Failed — strict majority (votes_for > votes_against) required
+        assert_eq!(
+            state,
+            ProposalState::Failed,
+            "a tied vote must resolve to Failed, not Passed"
+        );
+
+        // Confirm the stored state matches
+        let proposal = client.get_proposal(&pid);
+        assert_eq!(proposal.state, ProposalState::Failed);
+        assert_eq!(proposal.votes_for, 100);
+        assert_eq!(proposal.votes_against, 100);
+        assert!(proposal.passed_at.is_none(), "passed_at must not be set on a failed proposal");
     }
 
-    /// execute() must return NotInitialized (not panic) when DataKey::Config is
-    /// absent from instance storage.
+    /// One extra no vote tips a near-tie to Failed.
     #[test]
-    fn test_execute_returns_not_initialized_when_config_missing() {
+    fn test_near_tie_no_majority_resolves_to_failed() {
         let env = Env::default();
         env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 100_000);
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
 
-        let contract_id = env.register_contract(None, GovernorContract);
-        let client = GovernorContractClient::new(&env, &contract_id);
+        let proposer = Address::generate(&env);
+        let yes_voter = Address::generate(&env);
+        let no_voter = Address::generate(&env);
 
-        // Inject a Passed proposal with passed_at set so execute() reaches the Config read.
-        let fake_proposal = Proposal {
-            proposer: Address::generate(&env),
-            title: String::from_str(&env, "T"),
-            description: String::from_str(&env, "D"),
-            vote_start: 0,
-            vote_end: 0,
-            votes_for: 1000,
-            votes_against: 0,
-            passed_at: Some(0),
-            state: ProposalState::Passed,
-        };
-        env.as_contract(&contract_id, || {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Proposal(0u64), &fake_proposal);
-        });
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Near-tie Proposal"),
+            &String::from_str(&env, "No votes exceed yes by 1"),
+        );
 
+        // 100 yes, 101 no — quorum met, but no majority
+        client.vote(&yes_voter, &pid, &true, &100);
+        client.vote(&no_voter, &pid, &false, &101);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+        assert_eq!(state, ProposalState::Failed);
+    }
+
+    /// One extra yes vote tips a near-tie to Passed.
+    #[test]
+    fn test_near_tie_yes_majority_resolves_to_passed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let yes_voter = Address::generate(&env);
+        let no_voter = Address::generate(&env);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Near-tie Proposal"),
+            &String::from_str(&env, "Yes votes exceed no by 1"),
+        );
+
+        // 101 yes, 100 no — quorum met, strict majority achieved
+        client.vote(&yes_voter, &pid, &true, &101);
+        client.vote(&no_voter, &pid, &false, &100);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+        assert_eq!(state, ProposalState::Passed);
+    }
+
+    /// get_pending_proposals() reads only the ActiveProposals list, not every proposal.
+    /// Creates 25 proposals: finalizes the first 5, lets the next 5 expire (not finalized),
+    /// and keeps the last 15 active. Verifies only the 15 active ones are returned.
+    #[test]
+    fn test_get_pending_proposals_uses_active_list_not_full_scan() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env); // voting_period = 3600, quorum = 100
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+
+        // Create 25 proposals at t=0
+        let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::new(&env);
+        for i in 0u32..25 {
+            let title = String::from_str(&env, "P");
+            let desc = String::from_str(&env, "D");
+            let _ = i; // suppress unused warning
+            let pid = client.propose(&proposer, &title, &desc);
+            ids.push_back(pid);
+        }
+
+        // Vote on the first 5 before voting period ends (vote_end = 3600)
+        for i in 0..5u32 {
+            let pid = ids.get(i).unwrap();
+            client.vote(&voter, &pid, &true, &200);
+        }
+
+        // Finalize the first 5 after voting period ends
+        env.ledger().with_mut(|l| l.timestamp = 4000);
+        for i in 0..5u32 {
+            let pid = ids.get(i).unwrap();
+            client.finalize(&pid);
+        }
+
+        // Advance past voting period for proposals 5-9 (expired, not finalized)
+        // They remain Active in state but vote_end has passed — excluded from pending
+
+        // Advance to t=5000 so proposals 0-9 are all past their vote_end (t=3600)
+        // Proposals 10-24 were also created at t=0 so they also expire at t=3600...
+        // Re-create the last 15 at t=5000 so they have vote_end = 5000+3600 = 8600
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let mut active_ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::new(&env);
+        for _ in 0..15u32 {
+            let pid = client.propose(
+                &proposer,
+                &String::from_str(&env, "Active"),
+                &String::from_str(&env, "D"),
+            );
+            active_ids.push_back(pid);
+        }
+
+        // At t=5000 the first 25 proposals have expired (vote_end=3600), the new 15 are active
+        let pending = client.get_pending_proposals();
+        assert_eq!(
+            pending.len(),
+            15,
+            "expected exactly 15 active proposals, got {}",
+            pending.len()
+        );
+
+        // Verify the returned IDs match the 15 newly created ones
+        for i in 0..15u32 {
+            assert_eq!(
+                pending.get(i).unwrap(),
+                active_ids.get(i).unwrap(),
+                "pending[{i}] mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_proposal_state_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = setup(&env);
+
+        let result = client.try_get_proposal_state(&99);
+        assert_eq!(result, Err(Ok(GovernorError::ProposalNotFound)));
+    }
+
+    #[test]
+    fn test_get_proposal_state_active() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "State Test"),
+            &String::from_str(&env, "desc"),
+        );
+
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Active);
+    }
+
+    #[test]
+    fn test_get_proposal_state_passed_and_executed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "State Test"),
+            &String::from_str(&env, "desc"),
+        );
+        client.vote(&voter, &pid, &true, &200);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        client.finalize(&pid);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Passed);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000 + 86400 + 1);
         let executor = Address::generate(&env);
-        let result = client.try_execute(&executor, &0);
+        client.execute(&executor, &pid);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Executed);
+    }
+
+    #[test]
+    fn test_get_proposal_state_failed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "State Test"),
+            &String::from_str(&env, "desc"),
+        );
+        // No votes — quorum not reached
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        client.finalize(&pid);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Failed);
+    }
+
+    #[test]
+    fn test_get_vote_tally_no_votes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Tally Test"),
+            &String::from_str(&env, "desc"),
+        );
+
+        let tally = client.get_vote_tally(&pid);
+        assert_eq!(tally.yes_votes, 0);
+        assert_eq!(tally.no_votes, 0);
+        assert_eq!(tally.total_votes, 0);
+    }
+
+    #[test]
+    fn test_get_vote_tally_mixed_votes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Tally Test"),
+            &String::from_str(&env, "desc"),
+        );
+
+        let voter_a = Address::generate(&env);
+        let voter_b = Address::generate(&env);
+        client.vote(&voter_a, &pid, &true, &300);
+        client.vote(&voter_b, &pid, &false, &100);
+
+        let tally = client.get_vote_tally(&pid);
+        assert_eq!(tally.yes_votes, 300);
+        assert_eq!(tally.no_votes, 100);
+        assert_eq!(tally.total_votes, 400);
+    }
+
+    #[test]
+    fn test_get_vote_tally_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let client = setup(&env);
+
+        let result = client.try_get_vote_tally(&99);
+        assert_eq!(result, Err(Ok(GovernorError::ProposalNotFound)));
+    }
+
+    /// Test that propose() emits a proposal_created event with correct payload
+    #[test]
+    fn test_propose_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        client.propose(
+            &proposer,
+            &String::from_str(&env, "Test"),
+            &String::from_str(&env, "Desc"),
+        );
+
+        let events = env.events().all();
+        assert!(!events.is_empty(), "Expected at least one event");
+    }
+
+    #[test]
+    fn test_vote_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test"),
+            &String::from_str(&env, "Desc"),
+        );
+        client.vote(&voter, &pid, &true, &200);
+
+        let events = env.events().all();
+        assert!(events.len() >= 2, "Expected at least two events (propose + vote)");
+    }
+
+    #[test]
+    fn test_finalize_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test"),
+            &String::from_str(&env, "Desc"),
+        );
+        client.vote(&voter, &pid, &true, &200);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        client.finalize(&pid);
+
+        let events = env.events().all();
+        assert!(events.len() >= 3, "Expected at least three events (propose + vote + finalize)");
+    }
+
+    #[test]
+    fn test_execute_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let executor = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test"),
+            &String::from_str(&env, "Desc"),
+        );
+        client.vote(&voter, &pid, &true, &200);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        client.finalize(&pid);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000 + 86400 + 1);
+        client.execute(&executor, &pid);
+
+        let events = env.events().all();
+        assert!(events.len() >= 4, "Expected at least four events (propose + vote + finalize + execute)");
+    }
+
+    /// Test successful cancel: proposer can cancel an active proposal before voting ends
+    #[test]
+    fn test_cancel_proposal_successful() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Verify proposal is active
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Active);
+
+        // Cancel the proposal
+        client.cancel_proposal(&proposer, &pid);
+
+        // Verify proposal is now cancelled
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Cancelled);
+    }
+
+    /// Test cancel by non-proposer: only the original proposer can cancel
+    #[test]
+    fn test_cancel_proposal_by_non_proposer_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let other = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Try to cancel as a different address
+        let result = client.try_cancel_proposal(&other, &pid);
+        assert_eq!(result, Err(Ok(GovernorError::Unauthorized)));
+
+        // Verify proposal is still active
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Active);
+    }
+
+    /// Test cancel after voting ends: cannot cancel after voting period has ended
+    #[test]
+    fn test_cancel_proposal_after_voting_ends_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Advance time past voting period (voting_period = 3600)
+        env.ledger().with_mut(|l| l.timestamp = 1000 + 3600 + 1);
+
+        // Try to cancel after voting ends
+        let result = client.try_cancel_proposal(&proposer, &pid);
+        assert_eq!(result, Err(Ok(GovernorError::VotingClosed)));
+
+        // Verify proposal is still active (not cancelled)
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Active);
+    }
+
+    /// Test execute after cancel: cannot execute a cancelled proposal
+    #[test]
+    fn test_execute_after_cancel_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let executor = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Cancel the proposal
+        client.cancel_proposal(&proposer, &pid);
+
+        // Try to execute the cancelled proposal
+        let result = client.try_execute(&executor, &pid);
+        assert_eq!(result, Err(Ok(GovernorError::ProposalNotPassed)));
+
+        // Verify proposal is still cancelled
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Cancelled);
+    }
+
+    /// Test get_pending_proposals excludes cancelled proposals
+    #[test]
+    fn test_get_pending_proposals_excludes_cancelled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+
+        // Create two proposals
+        let pid1 = client.propose(
+            &proposer,
+            &String::from_str(&env, "Proposal 1"),
+            &String::from_str(&env, "Description 1"),
+        );
+        let pid2 = client.propose(
+            &proposer,
+            &String::from_str(&env, "Proposal 2"),
+            &String::from_str(&env, "Description 2"),
+        );
+
+        // Both should be pending
+        let pending = client.get_pending_proposals();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.contains(&pid1));
+        assert!(pending.contains(&pid2));
+
+        // Cancel the first proposal
+        client.cancel_proposal(&proposer, &pid1);
+
+        // Only the second proposal should be pending now
+        let pending = client.get_pending_proposals();
+        assert_eq!(pending.len(), 1);
+        assert!(!pending.contains(&pid1));
+        assert!(pending.contains(&pid2));
+    }
+
+    /// Test cancel already cancelled proposal: cannot cancel a proposal twice
+    #[test]
+    fn test_cancel_already_cancelled_proposal_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Cancel the proposal
+        client.cancel_proposal(&proposer, &pid);
+
+        // Try to cancel again
+        let result = client.try_cancel_proposal(&proposer, &pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyCancelled)));
+    }
+
+    /// Test that NextProposalId is not incremented when propose() fails.
+    ///
+    /// Case 1: propose() on an uninitialized contract returns NotInitialized
+    ///         and get_proposal_count() stays at 0.
+    /// Case 2: After one valid proposal, a second invalid call (uninitialized
+    ///         contract) leaves get_proposal_count() at 1, not 2.
+    #[test]
+    fn test_failed_propose_does_not_increment_proposal_counter() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+
+        // ── Case 1: uninitialized contract ────────────────────────────────────
+        let contract_id = env.register_contract(None, GovernorContract);
+        let uninit_client = GovernorContractClient::new(&env, &contract_id);
+
+        let proposer = Address::generate(&env);
+        let result = uninit_client.try_propose(
+            &proposer,
+            &String::from_str(&env, "Should Fail"),
+            &String::from_str(&env, "Contract not initialized"),
+        );
         assert_eq!(result, Err(Ok(GovernorError::NotInitialized)));
+
+        // Counter must still be 0 — the failed call must not have touched it
+        assert_eq!(
+            uninit_client.get_proposal_count(),
+            0,
+            "proposal count should remain 0 after failed propose on uninitialized contract"
+        );
+
+        // ── Case 2: one valid proposal, then a failed one on a separate uninit contract ──
+        let client = setup(&env);
+
+        // Valid proposal — counter goes to 1
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Valid Proposal"),
+            &String::from_str(&env, "This one succeeds"),
+        );
+        assert_eq!(pid, 0, "first proposal id should be 0");
+        assert_eq!(client.get_proposal_count(), 1, "count should be 1 after one valid proposal");
+
+        // Failed propose on the still-uninitialized contract must not affect its counter
+        let result2 = uninit_client.try_propose(
+            &proposer,
+            &String::from_str(&env, "Should Also Fail"),
+            &String::from_str(&env, "Still not initialized"),
+        );
+        assert_eq!(result2, Err(Ok(GovernorError::NotInitialized)));
+        assert_eq!(
+            uninit_client.get_proposal_count(),
+            0,
+            "uninit contract count should still be 0 after second failed propose"
+        );
+
+        // The initialized contract's counter must be unaffected too
+        assert_eq!(
+            client.get_proposal_count(),
+            1,
+            "initialized contract count should still be 1"
+        );
     }
 }

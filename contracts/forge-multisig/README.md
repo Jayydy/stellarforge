@@ -43,3 +43,4 @@ Soroban charges fees based on:
 ## Known Limitations
 
 - Owner list is fixed after initialization
+- **Threshold is immutable after initialization.** If a future version adds `update_threshold()`, the `approved_at` logic in `approve()` must be reviewed carefully. Lowering the threshold could cause a proposal to retroactively meet the new threshold at an earlier `approved_at` timestamp, potentially allowing premature execution. Any threshold mutation must preserve the original `approved_at` timestamp or implement additional safeguards.
