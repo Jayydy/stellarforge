@@ -1,5 +1,28 @@
 # Forge Stream
 
+## Storage Strategy
+
+`forge-stream` uses two Soroban storage tiers. The rule of thumb: use
+**persistent** for data that must survive beyond a single transaction or
+contract instance TTL; use **instance** for small, frequently-accessed
+scalars that are always read together with the contract instance.
+
+| `DataKey` variant | Storage type | Rationale |
+| :--- | :--- | :--- |
+| `Stream(u64)` | `persistent` | Stream data must outlive the instance TTL while tokens remain unclaimed |
+| `NextId` | `instance` | Small scalar always read on `create_stream`; co-located with instance for efficiency |
+| `ActiveStreamsCount` | `instance` | Updated on every create/cancel/finish; always accessed with other instance data |
+| `SenderStreams(Address)` | `persistent` | Grows with each stream; must survive beyond instance TTL for historical lookups |
+| `RecipientStreams(Address)` | `persistent` | Same rationale as `SenderStreams` |
+
+When adding a new `DataKey` variant, choose the storage type using this
+checklist:
+- Does the data need to survive after the contract instance TTL expires? → **persistent**
+- Is it a small scalar read on almost every call? → **instance**
+- Is it keyed per-user or per-stream (unbounded growth)? → **persistent**
+
+---
+
 ## Resource Usage
 
 > **Note:** Resource usage estimates are approximate and may vary based on contract state and input sizes. Run `stellar contract invoke` with `--cost` flag to measure actual usage for your specific use case.

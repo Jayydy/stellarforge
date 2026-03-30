@@ -16,10 +16,24 @@ use soroban_sdk::{
 
 #[contracttype]
 pub enum DataKey {
+    /// Per-stream data (token, sender, recipient, rate, timestamps, state).
+    /// Uses **persistent** storage — must outlive the contract instance TTL
+    /// for as long as the stream has unclaimed tokens.
     Stream(u64),
+    /// Monotonically increasing counter used to assign the next stream ID.
+    /// Uses **instance** storage — small scalar that is always read on
+    /// `create_stream`, so co-locating it with the instance is efficient.
     NextId,
+    /// Count of streams that are currently active (not cancelled/finished).
+    /// Uses **instance** storage — updated on every create/cancel/finish,
+    /// always accessed together with other instance data.
     ActiveStreamsCount,
+    /// List of stream IDs created by a given sender address.
+    /// Uses **persistent** storage — the list grows with each stream and
+    /// must survive beyond the instance TTL for historical lookups.
     SenderStreams(Address),
+    /// List of stream IDs where a given address is the recipient.
+    /// Uses **persistent** storage — same rationale as `SenderStreams`.
     RecipientStreams(Address),
 }
 

@@ -186,6 +186,18 @@ This must produce zero warnings.
 - No `unsafe` code is permitted in any contract.
 - No external crate dependencies beyond `soroban-sdk` are permitted without prior discussion with maintainers.
 
+### Storage Type Selection
+
+Soroban provides three storage tiers. When adding a new `DataKey` variant to any contract, pick the right one:
+
+| Storage type | Use when… |
+| :--- | :--- |
+| `instance()` | Small scalars (counters, config) that are read on almost every call and can share the contract instance TTL |
+| `persistent()` | Per-user or per-entity data (streams, vesting configs, proposals) that must survive beyond the instance TTL |
+| `temporary()` | Short-lived data that can expire without consequence (e.g. nonces, rate-limit windows) |
+
+Always add a comment above the variant in the `DataKey` enum documenting which storage type it uses and why. See `contracts/forge-stream/src/lib.rs` for an example.
+
 ---
 
 ## Pre-Commit Hook (Optional but Recommended)
