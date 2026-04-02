@@ -933,6 +933,42 @@ mod tests {
     }
 
     #[test]
+    fn test_initialize_invalid_amount_and_duration_rejected_without_storing_config() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        let zero_total = client.try_initialize(&token, &beneficiary, &admin, &0, &100, &1000);
+        assert_eq!(zero_total, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_vesting_schedule(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        let negative_total = client.try_initialize(&token, &beneficiary, &admin, &-1, &100, &1000);
+        assert_eq!(negative_total, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_vesting_schedule(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        let zero_duration =
+            client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &0, &0);
+        assert_eq!(zero_duration, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_vesting_schedule(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        let valid = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
+        assert!(valid.is_ok());
+
+        let schedule = client.get_vesting_schedule();
+        assert_eq!(schedule.total_amount, 1_000_000);
+        assert_eq!(schedule.cliff_seconds, 100);
+        assert_eq!(schedule.duration_seconds, 1000);
+    }
+
+    #[test]
     fn test_cancel_by_admin() {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
