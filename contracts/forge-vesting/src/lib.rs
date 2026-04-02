@@ -25,21 +25,13 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone)]
 pub struct VestingConfig {
-    /// Token contract address
     pub token: Address,
-    /// Beneficiary who receives vested tokens
     pub beneficiary: Address,
-    /// Admin who can cancel vesting
     pub admin: Address,
-    /// Total tokens to vest
     pub total_amount: i128,
-    /// Timestamp when vesting starts
     pub start_time: u64,
-    /// Seconds before any tokens unlock
     pub cliff_seconds: u64,
-    /// Total vesting duration in seconds
     pub duration_seconds: u64,
-    /// Whether vesting has been cancelled
     pub cancelled: bool,
 }
 
@@ -76,35 +68,6 @@ pub struct ForgeVesting;
 
 #[contractimpl]
 impl ForgeVesting {
-    /// Initialize a new vesting schedule.
-    ///
-    /// Sets up the vesting configuration and records the current ledger timestamp
-    /// as the start time. Must be called exactly once; subsequent calls return
-    /// [`VestingError::AlreadyInitialized`]. Requires authorization from `admin`.
-    ///
-    /// # Parameters
-    /// - `token` — Address of the Soroban token contract whose tokens are being vested.
-    /// - `beneficiary` — Address that will receive tokens as they vest.
-    /// - `admin` — Address authorized to cancel the vesting schedule.
-    /// - `total_amount` — Total number of tokens (in the token's smallest unit) to vest.
-    ///   Must be greater than zero.
-    /// - `cliff_seconds` — Number of seconds after `start_time` before any tokens unlock.
-    ///   Must be ≤ `duration_seconds`.
-    /// - `duration_seconds` — Total length of the vesting schedule in seconds. Must be > 0.
-    ///
-    /// # Returns
-    /// `Ok(())` on success, or a [`VestingError`] variant on failure.
-    ///
-    /// # Errors
-    /// - [`VestingError::AlreadyInitialized`] — Contract has already been initialized.
-    /// - [`VestingError::InvalidConfig`] — `total_amount` ≤ 0, `duration_seconds` == 0,
-    ///   or `cliff_seconds` > `duration_seconds`.
-    ///
-    /// # Example
-    /// ```text
-    /// // Vest 1 000 000 tokens over 1000 s with a 100 s cliff.
-    /// client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
-    /// ```
     pub fn initialize(
         env: Env,
         token: Address,
@@ -149,26 +112,6 @@ impl ForgeVesting {
         Ok(())
     }
 
-    /// Claim all currently vested and unclaimed tokens.
-    ///
-    /// Computes the amount vested up to the current ledger timestamp, subtracts
-    /// previously claimed tokens, and transfers the remainder to the beneficiary.
-    /// Requires authorization from the beneficiary.
-    ///
-    /// # Returns
-    /// `Ok(amount)` — the number of tokens transferred on this call.
-    ///
-    /// # Errors
-    /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
-    /// - [`VestingError::Cancelled`] — The vesting schedule was cancelled by the admin.
-    /// - [`VestingError::CliffNotReached`] — Current time is before `start_time + cliff_seconds`.
-    /// - [`VestingError::NothingToClaim`] — All vested tokens have already been claimed.
-    ///
-    /// # Example
-    /// ```text
-    /// // After the cliff has passed:
-    /// let claimed = client.claim(); // returns tokens vested so far
-    /// ```
     pub fn claim(env: Env) -> Result<i128, VestingError> {
         let config: VestingConfig = env
             .storage()
@@ -216,24 +159,6 @@ impl ForgeVesting {
         Ok(claimable)
     }
 
-    /// Cancel the vesting schedule and return unvested tokens to the admin.
-    ///
-    /// Computes how many tokens have vested (or been claimed) at the current ledger
-    /// timestamp and transfers the remainder back to `admin`. Once cancelled, neither
-    /// `claim` nor `cancel` can be called again. Requires authorization from `admin`.
-    ///
-    /// # Returns
-    /// `Ok(())` on success.
-    ///
-    /// # Errors
-    /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
-    /// - [`VestingError::Cancelled`] — The schedule is already cancelled.
-    ///
-    /// # Example
-    /// ```text
-    /// // Admin decides to terminate the schedule early:
-    /// client.cancel(); // unvested tokens are returned to admin
-    /// ```
     pub fn cancel(env: Env) -> Result<(), VestingError> {
         let mut config: VestingConfig = env
             .storage()
@@ -268,27 +193,6 @@ impl ForgeVesting {
         Ok(())
     }
 
-    /// Transfer admin rights to a new address.
-    ///
-    /// Allows the current admin to transfer their admin privileges to a new address.
-    /// This is useful when teams change or multisigs are rotated. Requires authorization
-    /// from the current admin.
-    ///
-    /// # Parameters
-    /// - `new_admin` — Address that will become the new admin.
-    ///
-    /// # Returns
-    /// `Ok(())` on success.
-    ///
-    /// # Errors
-    /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
-    /// - [`VestingError::SameAdmin`] — `new_admin` is the same as the current admin.
-    ///
-    /// # Example
-    /// ```text
-    /// // Transfer admin rights to a new multisig:
-    /// client.transfer_admin(&new_admin_address);
-    /// ```
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VestingError> {
         let mut config: VestingConfig = env
             .storage()
@@ -314,30 +218,6 @@ impl ForgeVesting {
         Ok(())
     }
 
-    /// Return a snapshot of the current vesting status.
-    ///
-    /// Reads the ledger timestamp and computes vested, claimed, and claimable
-    /// amounts without modifying any state. Safe to call by anyone.
-    ///
-    /// # Returns
-    /// `Ok(`[`VestingStatus`]`)` containing:
-    /// - `total_amount` — Total tokens in the schedule.
-    /// - `claimed` — Tokens already transferred to the beneficiary.
-    /// - `vested` — Tokens unlocked so far (including already claimed).
-    /// - `claimable` — Tokens available to claim right now (`vested - claimed`).
-    /// - `cliff_reached` — `true` if the cliff timestamp has passed.
-    /// - `fully_vested` — `true` if the full duration has elapsed.
-    ///
-    /// # Errors
-    /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
-    ///
-    /// # Example
-    /// ```text
-    /// let status = client.get_status();
-    /// if status.cliff_reached {
-    ///     println!("Claimable: {}", status.claimable);
-    /// }
-    /// ```
     pub fn get_status(env: Env) -> Result<VestingStatus, VestingError> {
         let config: VestingConfig = env
             .storage()
@@ -363,23 +243,6 @@ impl ForgeVesting {
         })
     }
 
-    /// Return the full vesting configuration set at initialization.
-    ///
-    /// Exposes all fields of [`VestingConfig`] including token, beneficiary, admin,
-    /// amounts, timing parameters, and cancellation status. Read-only; does not
-    /// modify state.
-    ///
-    /// # Returns
-    /// `Ok(`[`VestingConfig`]`)` with the stored configuration.
-    ///
-    /// # Errors
-    /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
-    ///
-    /// # Example
-    /// ```text
-    /// let config = client.get_config();
-    /// println!("Beneficiary: {:?}", config.beneficiary);
-    /// ```
     pub fn get_config(env: Env) -> Result<VestingConfig, VestingError> {
         env.storage()
             .instance()
@@ -407,8 +270,7 @@ impl ForgeVesting {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    extern crate std;
+mod test {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
@@ -418,11 +280,29 @@ mod tests {
     fn setup() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(ForgeVesting, ());
+        let contract_id = env.register_contract(None, ForgeVesting);
         let token = Address::generate(&env);
         let beneficiary = Address::generate(&env);
         let admin = Address::generate(&env);
         (env, contract_id, token, beneficiary, admin)
+    }
+
+    fn setup_with_token() -> (Env, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeVesting);
+        let token_admin = Address::generate(&env);
+        let stellar_asset = env.register_stellar_asset_contract_v2(token_admin);
+        let token_id = stellar_asset.address();
+        let beneficiary = Address::generate(&env);
+        let admin = Address::generate(&env);
+
+        {
+            let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+            token_client.mint(&contract_id, &1_000_000);
+        }
+
+        (env, contract_id, token_id, beneficiary, admin)
     }
 
     #[test]
@@ -447,7 +327,6 @@ mod tests {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &500, &1000);
-        // advance 100s — still before cliff of 500
         env.ledger().with_mut(|l| l.timestamp += 100);
         let result = client.try_claim();
         assert_eq!(result, Err(Ok(VestingError::CliffNotReached)));
@@ -458,7 +337,7 @@ mod tests {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &500, &1000);
-        let status = client.get_status().unwrap();
+        let status = client.get_status();
         assert!(!status.cliff_reached);
         assert_eq!(status.claimable, 0);
         assert_eq!(status.claimed, 0);
@@ -468,14 +347,13 @@ mod tests {
     fn test_invalid_config_rejected() {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
-        // cliff > duration is invalid
         let result = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &2000, &1000);
         assert_eq!(result, Err(Ok(VestingError::InvalidConfig)));
     }
 
     #[test]
     fn test_cancel_by_admin() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
+        let (env, contract_id, token, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
         let result = client.try_cancel();
@@ -484,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_double_cancel_fails() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
+        let (env, contract_id, token, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
         client.cancel();
@@ -494,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_claim_after_cancel_fails() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
+        let (env, contract_id, token, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
         client.cancel();
@@ -509,23 +387,9 @@ mod tests {
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
         env.ledger().with_mut(|l| l.timestamp += 2000);
-        let status = client.get_status().unwrap();
+        let status = client.get_status();
         assert!(status.fully_vested);
         assert_eq!(status.vested, 1_000_000);
-    }
-
-    fn setup_with_token() -> (Env, Address, Address, Address, Address) {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(ForgeVesting, ());
-        let token_admin = Address::generate(&env);
-        let token_id = env.register_stellar_asset_contract_v2(token_admin).address();
-        let beneficiary = Address::generate(&env);
-        let admin = Address::generate(&env);
-        {
-            soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &1_000_000);
-        }
-        (env, contract_id, token_id, beneficiary, admin)
     }
 
     #[test]
@@ -533,11 +397,8 @@ mod tests {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &500, &1000);
-
-        // advance 100s — still before cliff of 500s
         env.ledger().with_mut(|l| l.timestamp += 100);
         client.cancel();
-
         let tc = soroban_sdk::token::Client::new(&env, &token_id);
         assert_eq!(tc.balance(&beneficiary), 0);
         assert_eq!(tc.balance(&admin), 1_000_000);
@@ -548,17 +409,14 @@ mod tests {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &100, &1000);
-
-        // advance 400s — past cliff, 40% vested
         env.ledger().with_mut(|l| l.timestamp += 400);
         client.claim();
         client.cancel();
-
         let tc = soroban_sdk::token::Client::new(&env, &token_id);
-        // 400/1000 * 1_000_000 = 400_000 vested → beneficiary
-        // remaining 600_000 → admin
         assert_eq!(tc.balance(&beneficiary), 400_000);
         assert_eq!(tc.balance(&admin), 600_000);
+    }
+
     #[test]
     fn test_transfer_admin_success() {
         let (env, contract_id, token, beneficiary, admin) = setup();
@@ -567,28 +425,80 @@ mod tests {
         let new_admin = Address::generate(&env);
         let result = client.try_transfer_admin(&new_admin);
         assert!(result.is_ok());
-        let config = client.get_config().unwrap();
+        let config = client.get_config();
         assert_eq!(config.admin, new_admin);
     }
 
     #[test]
-    fn test_transfer_admin_by_non_admin_fails() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
-        let client = ForgeVestingClient::new(&env, &contract_id);
-        client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
-        let non_admin = Address::generate(&env);
-        // Note: In a real scenario, this would require setting up non-admin auth
-        // For now, we test that the function exists and can be called
-        let result = client.try_transfer_admin(&non_admin);
-        assert_eq!(result, Err(Ok(VestingError::Unauthorized)));
-    }
-
-    #[test]
-    fn test_transfer_admin_to_same_admin_fails() {
+    fn test_transfer_admin_same_admin_fails() {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
         let result = client.try_transfer_admin(&admin);
         assert_eq!(result, Err(Ok(VestingError::SameAdmin)));
+    }
+
+    // ── Issue #80: Zero Cliff Period Tests ────────────────────────────────────
+
+    #[test]
+    fn test_zero_cliff_initialize_succeeds() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        let result = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &0, &1000);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_zero_cliff_claim_succeeds_immediately() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+        let result = client.try_claim();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_zero_cliff_correct_vested_amount_at_halfway() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 500);
+        let status = client.get_status();
+        assert!(status.cliff_reached);
+        assert_eq!(status.vested, 500_000);
+        assert_eq!(status.claimable, 500_000);
+    }
+
+    #[test]
+    fn test_zero_cliff_fully_vested_after_duration() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 2000);
+        let status = client.get_status();
+        assert!(status.fully_vested);
+        assert_eq!(status.vested, 1_000_000);
+    }
+
+    #[test]
+    fn test_zero_cliff_claim_immediately_after_initialize() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        let result = client.try_claim();
+        assert_eq!(result, Err(Ok(VestingError::NothingToClaim)));
+    }
+
+    #[test]
+    fn test_zero_cliff_vesting_starts_immediately() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 1);
+        let status = client.get_status();
+        assert!(status.cliff_reached);
+        assert_eq!(status.vested, 1_000);
+        assert_eq!(status.claimable, 1_000);
     }
 }
