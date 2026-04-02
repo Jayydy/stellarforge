@@ -1117,6 +1117,62 @@ mod tests {
     }
 
     #[test]
+    fn test_get_approval_count_tracks_lifecycle_through_execution() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(&env, &contract_id);
+        let o1 = Address::generate(&env);
+        let o2 = Address::generate(&env);
+        let o3 = Address::generate(&env);
+        client.initialize(&vec![&env, o1.clone(), o2.clone(), o3.clone()], &3, &3600);
+
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &500);
+        let recipient = Address::generate(&env);
+
+        assert_eq!(client.get_approval_count(&999), 0);
+
+        let pid = client.propose(&o1, &recipient, &token_id, &500);
+        assert_eq!(client.get_approval_count(&pid), 1);
+
+        client.approve(&o2, &pid);
+        assert_eq!(client.get_approval_count(&pid), 2);
+
+        client.approve(&o3, &pid);
+        assert_eq!(client.get_approval_count(&pid), 3);
+
+        env.ledger().with_mut(|l| l.timestamp = 1000 + 3600 + 1);
+        client.execute(&o1, &pid);
+
+        assert_eq!(client.get_approval_count(&pid), 3);
+    }
+
+    #[test]
+    fn test_get_approval_count_for_rejected_proposal_stays_at_rejection_time_value() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, o1, o2, o3) = setup_2of3(&env);
+        let token = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        assert_eq!(client.get_approval_count(&404), 0);
+
+        let pid = client.propose(&o1, &to, &token, &500);
+        assert_eq!(client.get_approval_count(&pid), 1);
+
+        client.reject(&o2, &pid);
+        client.reject(&o3, &pid);
+
+        assert_eq!(client.get_approval_count(&pid), 1);
+        assert_eq!(client.get_proposal(&pid).unwrap().rejection_count, 2);
+    }
+
+    #[test]
     fn test_rejected_proposal_cannot_execute() {
         let env = Env::default();
         env.mock_all_auths();
