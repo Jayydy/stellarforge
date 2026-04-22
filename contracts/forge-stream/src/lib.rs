@@ -1557,6 +1557,104 @@ mod tests {
         assert_eq!(status_after.withdrawable, 0);
     }
 
+    /// pause_stream() must emit a "stream_paused" event whose data contains the
+    /// correct stream_id.
+    #[test]
+    fn test_pause_stream_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+
+        client.pause_stream(&stream_id);
+
+        let events = env.events().all();
+        let found = events.iter().any(|(_, topics, data)| {
+            topics
+                .get(0)
+                .and_then(|t| soroban_sdk::Symbol::try_from_val(&env, &t).ok())
+                .map(|s| s == soroban_sdk::Symbol::new(&env, "stream_paused"))
+                .unwrap_or(false)
+                && <u64>::try_from_val(&env, &data)
+                    .map(|id| id == stream_id)
+                    .unwrap_or(false)
+        });
+        assert!(found, "Expected stream_paused event with stream_id={stream_id} not found");
+    }
+
+    /// resume_stream() must emit a "stream_resumed" event whose data contains
+    /// the correct stream_id.
+    #[test]
+    fn test_resume_stream_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+        client.pause_stream(&stream_id);
+        env.ledger().with_mut(|l| l.timestamp += 50);
+
+        client.resume_stream(&stream_id);
+
+        let events = env.events().all();
+        let found = events.iter().any(|(_, topics, data)| {
+            topics
+                .get(0)
+                .and_then(|t| soroban_sdk::Symbol::try_from_val(&env, &t).ok())
+                .map(|s| s == soroban_sdk::Symbol::new(&env, "stream_resumed"))
+                .unwrap_or(false)
+                && <u64>::try_from_val(&env, &data)
+                    .map(|id| id == stream_id)
+                    .unwrap_or(false)
+        });
+        assert!(found, "Expected stream_resumed event with stream_id={stream_id} not found");
+    }
+
+    /// A failed pause_stream() (already paused) must not emit a stream_paused
+    /// event — the event list should contain only the first successful pause.
+    #[test]
+    fn test_no_pause_event_on_failed_pause() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        client.pause_stream(&stream_id); // succeeds — emits one event
+
+        // Second pause must fail
+        let result = client.try_pause_stream(&stream_id);
+        assert_eq!(result, Err(Ok(StreamError::InvalidConfig)));
+
+        // Only one stream_paused event should exist (from the first call)
+        let events = env.events().all();
+        let pause_event_count = events.iter().filter(|(_, topics, _)| {
+            topics
+                .get(0)
+                .and_then(|t| soroban_sdk::Symbol::try_from_val(&env, &t).ok())
+                .map(|s| s == soroban_sdk::Symbol::new(&env, "stream_paused"))
+                .unwrap_or(false)
+        }).count();
+        assert_eq!(pause_event_count, 1, "Expected exactly 1 stream_paused event, got {pause_event_count}");
+    }
+
     #[test]
     fn test_pause_already_paused() {
         let env = Env::default();
