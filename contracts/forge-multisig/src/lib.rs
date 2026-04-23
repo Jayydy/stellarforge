@@ -610,6 +610,14 @@ impl MultisigContract {
             &proposal.amount,
         );
 
+        // Mark executed AFTER the transfer succeeds. Setting executed = true before
+        // the transfer would permanently lock funds if the transfer traps — the
+        // proposal would be unretryable and the tokens unreachable forever.
+        proposal.executed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
         // Release the committed amount for this proposal
         let new_committed = committed.saturating_sub(proposal.amount);
         env.storage().instance().set(
@@ -2379,5 +2387,43 @@ mod tests {
         let xlm_client = soroban_sdk::token::Client::new(&env, &xlm_sac);
         assert_eq!(token_client.balance(&recipient), 200);
         assert_eq!(xlm_client.balance(&recipient), 50_000_000);
+    }
+
+    /// If execute() traps before the transfer completes (e.g. InsufficientFunds),
+    /// proposal.executed must remain false so the proposal can be retried once
+    /// the treasury is funded. This guards against the pre-transfer executed=true
+    /// bug that would permanently lock funds.
+    #[test]
+    fn test_execute_does_not_mark_executed_on_failed_transfer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(&env, &contract_id);
+        let o1 = Address::generate(&env);
+        let o2 = Address::generate(&env);
+        // Zero timelock so we can execute immediately
+        client.initialize(&vec![&env, o1.clone(), o2.clone()], &2, &0);
+
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        let recipient = Address::generate(&env);
+
+        // Propose 500 but do NOT fund the contract — transfer will fail
+        let pid = client.propose(&o1, &recipient, &token_id, &500);
+        client.approve(&o2, &pid);
+
+        // Execute must return InsufficientFunds
+        let result = client.try_execute(&o1, &pid);
+        assert_eq!(result, Err(Ok(MultisigError::InsufficientFunds)));
+
+        // proposal.executed must still be false — proposal is retryable
+        let proposal = client.get_proposal(&pid).unwrap();
+        assert!(
+            !proposal.executed,
+            "executed must remain false when transfer fails"
+        );
     }
 }
