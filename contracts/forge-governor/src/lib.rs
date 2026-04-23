@@ -281,9 +281,11 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Proposal(proposal_id), PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Proposal(proposal_id),
+            PROPOSAL_TTL_EXTEND,
+            PROPOSAL_TTL_EXTEND,
+        );
         env.storage()
             .persistent()
             .set(&DataKey::NextProposalId, &(proposal_id + 1));
@@ -408,9 +410,11 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Proposal(proposal_id), PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Proposal(proposal_id),
+            PROPOSAL_TTL_EXTEND,
+            PROPOSAL_TTL_EXTEND,
+        );
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
@@ -456,8 +460,16 @@ impl GovernorContract {
             .get(&DataKey::Proposal(proposal_id))
             .ok_or(GovernorError::ProposalNotFound)?;
 
-        if proposal.state != ProposalState::Active {
-            return Err(GovernorError::AlreadyFinalized);
+        match proposal.state {
+            ProposalState::Active => {
+                // Continue with finalization logic
+            }
+            ProposalState::Cancelled => {
+                return Err(GovernorError::AlreadyCancelled);
+            }
+            ProposalState::Passed | ProposalState::Failed | ProposalState::Executed => {
+                return Err(GovernorError::AlreadyFinalized);
+            }
         }
 
         let now = env.ledger().timestamp();
@@ -483,9 +495,11 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Proposal(proposal_id), PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Proposal(proposal_id),
+            PROPOSAL_TTL_EXTEND,
+            PROPOSAL_TTL_EXTEND,
+        );
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
@@ -555,9 +569,7 @@ impl GovernorContract {
             return Err(GovernorError::ProposalNotPassed);
         }
 
-        let passed_at = proposal
-            .passed_at
-            .ok_or(GovernorError::ProposalNotPassed)?;
+        let passed_at = proposal.passed_at.ok_or(GovernorError::ProposalNotPassed)?;
         let config: GovernorConfig = env
             .storage()
             .instance()
@@ -572,9 +584,11 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Proposal(proposal_id), PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Proposal(proposal_id),
+            PROPOSAL_TTL_EXTEND,
+            PROPOSAL_TTL_EXTEND,
+        );
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
@@ -1113,8 +1127,14 @@ mod tests {
         let proposer = Address::generate(&env);
 
         // Create 5 proposals and capture returned IDs
-        let titles = ["Proposal 0", "Proposal 1", "Proposal 2", "Proposal 3", "Proposal 4"];
-        let descs  = ["Desc 0",     "Desc 1",     "Desc 2",     "Desc 3",     "Desc 4"];
+        let titles = [
+            "Proposal 0",
+            "Proposal 1",
+            "Proposal 2",
+            "Proposal 3",
+            "Proposal 4",
+        ];
+        let descs = ["Desc 0", "Desc 1", "Desc 2", "Desc 3", "Desc 4"];
         let mut ids = [0u64; 5];
         for i in 0..5 {
             ids[i] = client.propose(
@@ -1552,14 +1572,14 @@ mod tests {
             &String::from_str(&env, "No votes"),
         );
         // No votes — quorum not met → Failed
-        env.ledger().with_mut(|l| l.timestamp = finalize_time + 86400 + 5000);
+        env.ledger()
+            .with_mut(|l| l.timestamp = finalize_time + 86400 + 5000);
         let state2 = client.finalize(&pid2);
         assert_eq!(state2, ProposalState::Failed);
 
         let failed_proposal = client.get_proposal(&pid2);
         assert_eq!(
-            failed_proposal.passed_at,
-            None,
+            failed_proposal.passed_at, None,
             "passed_at must be None for a Failed proposal"
         );
     }
@@ -1591,7 +1611,8 @@ mod tests {
         client.finalize(&pid);
 
         // Still locked at finalize_time + timelock_delay
-        env.ledger().with_mut(|l| l.timestamp = finalize_time + 86400);
+        env.ledger()
+            .with_mut(|l| l.timestamp = finalize_time + 86400);
         let result = client.try_execute(&executor, &pid);
         assert_eq!(result, Err(Ok(GovernorError::TimelockNotElapsed)));
 
@@ -1740,7 +1761,10 @@ mod tests {
         client.vote(&voter, &pid, &VoteDirection::For, &100);
 
         // Entry must be present immediately after voting
-        assert!(client.has_voted(&pid, &voter), "has_voted must return true after vote");
+        assert!(
+            client.has_voted(&pid, &voter),
+            "has_voted must return true after vote"
+        );
 
         // A second vote attempt must fail — confirming the entry is still live
         let result = client.try_vote(&voter, &pid, &VoteDirection::Against, &100);
@@ -2722,7 +2746,9 @@ mod tests {
         client.initialize(&config);
 
         // get_config() must return Some with the exact values passed to initialize()
-        let stored = client.get_config().expect("config should be Some after initialize");
+        let stored = client
+            .get_config()
+            .expect("config should be Some after initialize");
         assert_eq!(stored.vote_token, vote_token);
         assert_eq!(stored.voting_period, 7200);
         assert_eq!(stored.quorum, 50);
@@ -2794,6 +2820,135 @@ mod tests {
         assert_eq!(client.get_vote_weight(&999, &voter), None);
     }
 
+    // ── Tests for finalize() state handling (issue #138 compatibility) ────────
+
+    /// Test finalize() with Cancelled state returns AlreadyCancelled error
+    #[test]
+    fn test_finalize_cancelled_proposal_returns_already_cancelled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Cancel the proposal
+        client.cancel_proposal(&proposer, &pid);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Cancelled);
+
+        // Try to finalize the cancelled proposal
+        let result = client.try_finalize(&pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyCancelled)));
+
+        // Verify proposal state remains Cancelled
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Cancelled);
+    }
+
+    /// Test finalize() with Passed state returns AlreadyFinalized error
+    #[test]
+    fn test_finalize_passed_proposal_returns_already_finalized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (client, token_id) = setup_with_token(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        mint(&env, &token_id, &voter, 200);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Vote and finalize to Passed state
+        client.vote(&voter, &pid, &VoteDirection::For, &200);
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+        assert_eq!(state, ProposalState::Passed);
+
+        // Try to finalize again
+        let result = client.try_finalize(&pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyFinalized)));
+
+        // Verify proposal state remains Passed
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Passed);
+    }
+
+    /// Test finalize() with Failed state returns AlreadyFinalized error
+    #[test]
+    fn test_finalize_failed_proposal_returns_already_finalized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = setup(&env);
+
+        let proposer = Address::generate(&env);
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // No votes - will fail quorum
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+        assert_eq!(state, ProposalState::Failed);
+
+        // Try to finalize again
+        let result = client.try_finalize(&pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyFinalized)));
+
+        // Verify proposal state remains Failed
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Failed);
+    }
+
+    /// Test finalize() with Executed state returns AlreadyFinalized error
+    #[test]
+    fn test_finalize_executed_proposal_returns_already_finalized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (client, token_id) = setup_with_token(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let executor = Address::generate(&env);
+        mint(&env, &token_id, &voter, 200);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Vote, finalize, and execute
+        client.vote(&voter, &pid, &VoteDirection::For, &200);
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        client.finalize(&pid);
+        env.ledger().with_mut(|l| l.timestamp = 5000 + 86400 + 1);
+        client.execute(&executor, &pid);
+
+        // Verify proposal is Executed
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Executed);
+
+        // Try to finalize the executed proposal
+        let result = client.try_finalize(&pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyFinalized)));
+
+        // Verify proposal state remains Executed
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Executed);
+    }
+
+    /// Test finalize() still works correctly with Active proposals (normal case)
+    #[test]
+    fn test_finalize_active_proposal_still_works() {
     // ── Issue #335: abstain votes count toward quorum but not toward passing ──
 
     /// Scenario 1: 100 abstain votes meet quorum (100) but proposal fails because
@@ -2847,6 +3002,57 @@ mod tests {
         let (client, token_id) = setup_with_token(&env);
 
         let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        mint(&env, &token_id, &voter, 200);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Vote and advance past voting period
+        client.vote(&voter, &pid, &VoteDirection::For, &200);
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+
+        // Finalize should work normally for Active proposals
+        let state = client.finalize(&pid);
+        assert_eq!(state, ProposalState::Passed);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Passed);
+    }
+
+    /// Test finalize() compatibility with cancel_proposal() workflow
+    #[test]
+    fn test_finalize_compatibility_with_cancel_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let (client, token_id) = setup_with_token(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        mint(&env, &token_id, &voter, 100);
+
+        // Create a proposal and vote on it
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+        client.vote(&voter, &pid, &VoteDirection::For, &100);
+
+        // Cancel before voting period ends
+        client.cancel_proposal(&proposer, &pid);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Cancelled);
+
+        // Finalize should return AlreadyCancelled, not AlreadyFinalized
+        let result = client.try_finalize(&pid);
+        assert_eq!(result, Err(Ok(GovernorError::AlreadyCancelled)));
+
+        // Even after voting period ends, still should return AlreadyCancelled
+        env.ledger().with_mut(|l| l.timestamp = 1000 + 3600 + 1);
+        let result2 = client.try_finalize(&pid);
+        assert_eq!(result2, Err(Ok(GovernorError::AlreadyCancelled)));
         let yes_voter = Address::generate(&env);
         let abstainer = Address::generate(&env);
         mint(&env, &token_id, &yes_voter, 51);
