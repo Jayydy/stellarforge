@@ -563,14 +563,21 @@ impl ForgeStream {
     /// - `withdrawn`: Cumulative withdrawn
     /// - `withdrawable`: streamed - withdrawn
     /// - `remaining`: total - streamed
-    /// - `is_active`: !cancelled && !paused && now < end_time
+    /// - `is_active`: `true` when the stream is currently accruing tokens
+    ///   (`!cancelled && !paused && now < end_time`). A paused or finished
+    ///   stream has `is_active = false` even if tokens remain claimable.
     /// - `is_finished`: now >= end_time
-    /// - `is_claimable`: withdrawable > 0
+    /// - `is_paused`: stream is currently paused
+    /// - `is_claimable`: `true` when `withdrawable > 0`. Independent of
+    ///   `is_active` — a paused or finished stream can still be claimable.
+    ///   Always check `is_claimable` (not `is_active`) to decide whether a
+    ///   withdrawal is available.
     ///
-    /// **Note:** `is_active = false` does **not** imply `withdrawable = 0`.
-    /// A finished stream (`is_finished = true`) may still have tokens available
-    /// to withdraw. Always check `is_claimable` or `withdrawable` directly
-    /// before assuming nothing can be claimed.
+    /// **Note:** `is_active` and `is_claimable` are intentionally separate.
+    /// `is_active` answers "is this stream accruing right now?" while
+    /// `is_claimable` answers "can the recipient withdraw tokens right now?".
+    /// A paused stream stops accruing (`is_active = false`) but tokens that
+    /// accrued before the pause remain withdrawable (`is_claimable = true`).
     ///
     /// # Example
     /// ```rust,ignore
@@ -3026,5 +3033,35 @@ mod tests {
             total,
             "withdrawable + returnable must equal total even with paused time"
         );
+    }
+
+    /// A paused stream stops accruing (is_active = false) but tokens that
+    /// accrued before the pause are still claimable (is_claimable = true).
+    /// This guards against UIs that check is_active to show a withdraw button.
+    #[test]
+    fn test_paused_stream_is_not_active_but_is_claimable() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+
+        // 100 tokens/s for 1000s
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+
+        // Advance 200s so 20,000 tokens have accrued
+        env.ledger().with_mut(|l| l.timestamp += 200);
+
+        // Pause — accrual stops but 20,000 tokens are still withdrawable
+        client.pause_stream(&stream_id);
+
+        let status = client.get_stream_status(&stream_id);
+
+        assert!(status.is_paused, "stream should be paused");
+        assert!(!status.is_active, "paused stream must not be active (not accruing)");
+        assert_eq!(status.withdrawable, 20_000, "20,000 tokens accrued before pause");
+        assert!(status.is_claimable, "paused stream with accrued tokens must be claimable");
     }
 }
