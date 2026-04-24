@@ -11,7 +11,7 @@
 //! - Event emission on every price update
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, vec, Address, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
 };
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
