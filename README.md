@@ -6,6 +6,42 @@ StellarForge is a collection of production-ready, well-tested smart contracts bu
 
 ---
 
+## 📦 Installation
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+| :--- | :--- | :--- |
+| [Rust](https://rustup.rs/) | stable (2021 edition) | Install via `rustup` |
+| WASM target `wasm32v1-none` | — | Required by the Soroban runtime |
+| [Stellar CLI](https://developers.stellar.org/docs/smart-contracts/getting-started/setup) | ≥ 25.2.0 | Used to build, deploy, and invoke contracts |
+
+### Install dependencies
+
+```bash
+# 1. Install Rust (skip if already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 2. Add the WebAssembly target
+rustup target add wasm32v1-none
+
+# 3. Install the Stellar CLI
+cargo install --locked stellar-cli
+```
+
+### Get the code and build
+
+```bash
+git clone https://github.com/Austinaminu2/stellarforge.git
+cd stellarforge
+make build
+```
+
+For a full walkthrough including running tests and deploying to testnet, see the [Prerequisites & Setup](#️-prerequisites--setup) section.
+
+---
+
 ## 📊 Contract Comparison
 Developers evaluating StellarForge can use this table to quickly identify the right primitive for their specific use case.
 
