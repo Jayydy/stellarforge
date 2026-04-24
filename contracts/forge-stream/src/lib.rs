@@ -68,6 +68,8 @@ pub struct Stream {
     pub total_paused_time: u64,
     /// Whether this stream is currently counted as active in the global counter
     pub counted_active: bool,
+    /// Minimum withdrawal amount to prevent dust withdrawals (0 means no minimum)
+    pub min_withdrawal_amount: i128,
 }
 
 #[contracttype]
@@ -98,6 +100,8 @@ pub enum StreamError {
     /// Sender's token balance is less than the total required to fund the stream
     /// (`rate_per_second * duration_seconds`).
     InsufficientFunds = 7,
+    /// Withdrawal amount is below the minimum threshold
+    BelowMinimumWithdrawal = 8,
 }
 
 #[contract]
@@ -116,6 +120,7 @@ impl ForgeStream {
     /// - `recipient`: Who receives withdrawn tokens
     /// - `rate_per_second`: i128 > 0, tokens unlocked per ledger second
     /// - `duration_seconds`: u64 > 0, stream length in seconds
+    /// - `min_withdrawal_amount`: i128 >= 0, minimum tokens required for withdrawal (0 means no minimum)
     ///
     /// # Returns
     /// u64: Unique stream ID
@@ -129,11 +134,12 @@ impl ForgeStream {
     ///     recipient,
     ///     100i128,  // 100 tokens/sec
     ///     3600u64,  // 1 hour = 360,000 total tokens
+    ///     1000i128, // minimum withdrawal of 1000 tokens
     /// )?;
     /// ```
     ///
     /// # Errors
-    /// - `InvalidConfig` if rate <= 0 or duration == 0
+    /// - `InvalidConfig` if rate <= 0, duration == 0, or min_withdrawal_amount < 0
     /// - `InsufficientFunds` if sender balance < rate_per_second * duration_seconds
     pub fn create_stream(
         env: Env,
@@ -142,8 +148,9 @@ impl ForgeStream {
         recipient: Address,
         rate_per_second: i128,
         duration_seconds: u64,
+        min_withdrawal_amount: i128,
     ) -> Result<u64, StreamError> {
-        if rate_per_second <= 0 || duration_seconds == 0 {
+        if rate_per_second <= 0 || duration_seconds == 0 || min_withdrawal_amount < 0 {
             return Err(StreamError::InvalidConfig);
         }
 
@@ -184,6 +191,7 @@ impl ForgeStream {
             paused_at: None,
             total_paused_time: 0,
             counted_active: true,
+            min_withdrawal_amount,
         };
 
         env.storage()
@@ -237,6 +245,7 @@ impl ForgeStream {
                 &stream.recipient,
                 rate_per_second,
                 duration_seconds,
+                min_withdrawal_amount,
             ),
         );
 
@@ -248,6 +257,9 @@ impl ForgeStream {
     /// Computes tokens accrued since `start_time` up to current ledger time (capped at `end_time`),
     /// minus previously withdrawn amount. Transfers to `recipient`.
     /// Only callable by the stream's `recipient`.
+    ///
+    /// Enforces minimum withdrawal amount to prevent dust withdrawals, except when the stream
+    /// has fully elapsed (recipient should always be able to claim everything).
     ///
     /// # Parameters
     /// - `stream_id`: u64 stream identifier
@@ -267,6 +279,7 @@ impl ForgeStream {
     /// - `Unauthorized` (not recipient)
     /// - `AlreadyCancelled`
     /// - `NothingToWithdraw`
+    /// - `BelowMinimumWithdrawal` (withdrawable < min_withdrawal_amount and stream not finished)
     pub fn withdraw(env: Env, stream_id: u64) -> Result<i128, StreamError> {
         Self::validate_stream_id(&env, stream_id)?;
         let mut stream: Stream = env
@@ -287,6 +300,15 @@ impl ForgeStream {
 
         if withdrawable <= 0 {
             return Err(StreamError::NothingToWithdraw);
+        }
+
+        // Enforce minimum withdrawal amount, except when stream is fully elapsed
+        let is_finished = now >= stream.end_time;
+        if !is_finished
+            && withdrawable < stream.min_withdrawal_amount
+            && stream.min_withdrawal_amount > 0
+        {
+            return Err(StreamError::BelowMinimumWithdrawal);
         }
 
         stream.withdrawn += withdrawable;
@@ -1212,8 +1234,7 @@ mod tests {
         StellarAssetClient::new(&env, &token_id).mint(&sender, &100_000i128);
 
         // rate=100, duration=1000 → total=100_000
-        let stream_id =
-            client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
         // Advance past end_time without withdrawing
         env.ledger().with_mut(|l| l.timestamp += 2000);
 
@@ -1617,7 +1638,10 @@ mod tests {
                     .map(|id| id == stream_id)
                     .unwrap_or(false)
         });
-        assert!(found, "Expected stream_paused event with stream_id={stream_id} not found");
+        assert!(
+            found,
+            "Expected stream_paused event with stream_id={stream_id} not found"
+        );
     }
 
     /// resume_stream() must emit a "stream_resumed" event whose data contains
@@ -1652,7 +1676,10 @@ mod tests {
                     .map(|id| id == stream_id)
                     .unwrap_or(false)
         });
-        assert!(found, "Expected stream_resumed event with stream_id={stream_id} not found");
+        assert!(
+            found,
+            "Expected stream_resumed event with stream_id={stream_id} not found"
+        );
     }
 
     /// A failed pause_stream() (already paused) must not emit a stream_paused
@@ -1678,14 +1705,20 @@ mod tests {
 
         // Only one stream_paused event should exist (from the first call)
         let events = env.events().all();
-        let pause_event_count = events.iter().filter(|(_, topics, _)| {
-            topics
-                .get(0)
-                .and_then(|t| Symbol::try_from_val(&env, &t).ok())
-                .map(|s| s == Symbol::new(&env, "stream_paused"))
-                .unwrap_or(false)
-        }).count();
-        assert_eq!(pause_event_count, 1, "Expected exactly 1 stream_paused event, got {pause_event_count}");
+        let pause_event_count = events
+            .iter()
+            .filter(|(_, topics, _)| {
+                topics
+                    .get(0)
+                    .and_then(|t| Symbol::try_from_val(&env, &t).ok())
+                    .map(|s| s == Symbol::new(&env, "stream_paused"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            pause_event_count, 1,
+            "Expected exactly 1 stream_paused event, got {pause_event_count}"
+        );
     }
 
     #[test]
@@ -2800,8 +2833,16 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 100);
         client.cancel_stream(&stream_id);
 
-        assert_eq!(token.balance(&recipient), 10_000, "recipient should get 10,000");
-        assert_eq!(token.balance(&sender), 350_000, "sender should be refunded 350,000");
+        assert_eq!(
+            token.balance(&recipient),
+            10_000,
+            "recipient should get 10,000"
+        );
+        assert_eq!(
+            token.balance(&sender),
+            350_000,
+            "sender should be refunded 350,000"
+        );
         assert_eq!(
             token.balance(&recipient) + token.balance(&sender),
             total,
@@ -2841,8 +2882,7 @@ mod tests {
 
         let rate: i128 = 100;
         let duration: u64 = 3600;
-        let (_, recipient, _, stream_id) =
-            make_stream_for_events(&env, &client, rate, duration);
+        let (_, recipient, _, stream_id) = make_stream_for_events(&env, &client, rate, duration);
 
         let events = env.events().all();
         let found = events.iter().any(|(_, topics, data)| {
@@ -2857,7 +2897,10 @@ mod tests {
                     })
                     .unwrap_or(false)
         });
-        assert!(found, "Expected stream_created event with correct payload not found");
+        assert!(
+            found,
+            "Expected stream_created event with correct payload not found"
+        );
     }
 
     #[test]
@@ -2871,8 +2914,7 @@ mod tests {
 
         let rate: i128 = 100;
         let duration: u64 = 3600;
-        let (_, recipient, _, stream_id) =
-            make_stream_for_events(&env, &client, rate, duration);
+        let (_, recipient, _, stream_id) = make_stream_for_events(&env, &client, rate, duration);
 
         // Advance 50s so there are tokens to withdraw
         env.ledger().with_mut(|l| l.timestamp = 50);
@@ -2889,7 +2931,10 @@ mod tests {
                     .map(|(id, r, amt)| id == stream_id && r == recipient && amt == amount)
                     .unwrap_or(false)
         });
-        assert!(found, "Expected withdrawn event with correct payload not found");
+        assert!(
+            found,
+            "Expected withdrawn event with correct payload not found"
+        );
     }
 
     #[test]
@@ -2903,8 +2948,7 @@ mod tests {
 
         let rate: i128 = 100;
         let duration: u64 = 3600;
-        let (_, _, _, stream_id) =
-            make_stream_for_events(&env, &client, rate, duration);
+        let (_, _, _, stream_id) = make_stream_for_events(&env, &client, rate, duration);
 
         // Advance 100s so some tokens have streamed
         env.ledger().with_mut(|l| l.timestamp = 100);
@@ -2927,7 +2971,10 @@ mod tests {
                     })
                     .unwrap_or(false)
         });
-        assert!(found, "Expected stream_cancelled event with correct payload not found");
+        assert!(
+            found,
+            "Expected stream_cancelled event with correct payload not found"
+        );
     }
 
     #[test]
@@ -2939,8 +2986,7 @@ mod tests {
         let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
 
-        let (_, _, _, stream_id) =
-            make_stream_for_events(&env, &client, 100, 3600);
+        let (_, _, _, stream_id) = make_stream_for_events(&env, &client, 100, 3600);
 
         env.ledger().with_mut(|l| l.timestamp = 50);
         client.pause_stream(&stream_id);
@@ -2968,8 +3014,7 @@ mod tests {
         let contract_id = env.register_contract(None, ForgeStream);
         let client = ForgeStreamClient::new(&env, &contract_id);
 
-        let (_, _, _, stream_id) =
-            make_stream_for_events(&env, &client, 100, 3600);
+        let (_, _, _, stream_id) = make_stream_for_events(&env, &client, 100, 3600);
 
         env.ledger().with_mut(|l| l.timestamp = 50);
         client.pause_stream(&stream_id);
@@ -3060,9 +3105,18 @@ mod tests {
         let status = client.get_stream_status(&stream_id);
 
         assert!(status.is_paused, "stream should be paused");
-        assert!(!status.is_active, "paused stream must not be active (not accruing)");
-        assert_eq!(status.withdrawable, 20_000, "20,000 tokens accrued before pause");
-        assert!(status.is_claimable, "paused stream with accrued tokens must be claimable");
+        assert!(
+            !status.is_active,
+            "paused stream must not be active (not accruing)"
+        );
+        assert_eq!(
+            status.withdrawable, 20_000,
+            "20,000 tokens accrued before pause"
+        );
+        assert!(
+            status.is_claimable,
+            "paused stream with accrued tokens must be claimable"
+        );
     }
 
     // ── Issue #338: extend_stream() comprehensive coverage ───────────────────
@@ -3223,6 +3277,176 @@ mod tests {
             result,
             Err(Ok(StreamError::InvalidConfig)),
             "extending with 0 additional_seconds must revert with InvalidConfig"
+        );
+    }
+
+    // ── Minimum withdrawal amount tests ───────────────────────────────────────
+
+    /// Withdrawal below minimum should be rejected with BelowMinimumWithdrawal error
+    #[test]
+    fn test_withdrawal_below_minimum_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
+
+        // Create stream with minimum withdrawal of 1000 tokens
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000, &1000);
+
+        // Advance time by 5 seconds: 100 * 5 = 500 tokens accrued
+        env.ledger().with_mut(|l| l.timestamp += 5);
+
+        // 500 < 1000 minimum, should be rejected
+        let result = client.try_withdraw(&stream_id);
+        assert_eq!(
+            result,
+            Err(Ok(StreamError::BelowMinimumWithdrawal)),
+            "withdrawal below minimum should be rejected"
+        );
+    }
+
+    /// Withdrawal above minimum should succeed
+    #[test]
+    fn test_withdrawal_above_minimum_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
+
+        // Create stream with minimum withdrawal of 1000 tokens
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000, &1000);
+
+        // Advance time by 15 seconds: 100 * 15 = 1500 tokens accrued
+        env.ledger().with_mut(|l| l.timestamp += 15);
+
+        // 1500 >= 1000 minimum, should succeed
+        let withdrawn = client.withdraw(&stream_id);
+        assert_eq!(withdrawn, 1500, "withdrawal above minimum should succeed");
+    }
+
+    /// End-of-stream should bypass minimum withdrawal restriction
+    #[test]
+    fn test_end_of_stream_bypass_minimum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
+
+        // Create stream with minimum withdrawal of 1000 tokens
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000, &1000);
+
+        // Advance time by 5 seconds: 100 * 5 = 500 tokens accrued
+        env.ledger().with_mut(|l| l.timestamp += 5);
+
+        // Advance past end_time (stream duration is 1000 seconds)
+        env.ledger().with_mut(|l| l.timestamp += 1000);
+
+        // Even though 500 < 1000 minimum, should succeed because stream is finished
+        let withdrawn = client.withdraw(&stream_id);
+        assert_eq!(
+            withdrawn, 500,
+            "end-of-stream should bypass minimum restriction"
+        );
+    }
+
+    /// Zero minimum should impose no restriction
+    #[test]
+    fn test_zero_minimum_no_restriction() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
+
+        // Create stream with zero minimum (no restriction)
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000, &0);
+
+        // Advance time by 1 second: 100 * 1 = 100 tokens accrued
+        env.ledger().with_mut(|l| l.timestamp += 1);
+
+        // Should succeed even with small amount since minimum is 0
+        let withdrawn = client.withdraw(&stream_id);
+        assert_eq!(withdrawn, 100, "zero minimum should impose no restriction");
+    }
+
+    /// Negative minimum withdrawal amount should be rejected at creation
+    #[test]
+    fn test_negative_minimum_rejected_at_creation() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100_000);
+
+        // Negative minimum should be rejected
+        let result = client.try_create_stream(&sender, &token, &recipient, &100, &1000, &-1000);
+        assert_eq!(
+            result,
+            Err(Ok(StreamError::InvalidConfig)),
+            "negative minimum should be rejected at creation"
+        );
+    }
+
+    /// get_claimable() should return raw amount regardless of minimum
+    #[test]
+    fn test_get_claimable_ignores_minimum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
+
+        // Create stream with minimum withdrawal of 1000 tokens
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000, &1000);
+
+        // Advance time by 5 seconds: 100 * 5 = 500 tokens accrued
+        env.ledger().with_mut(|l| l.timestamp += 5);
+
+        // get_claimable should return 500 regardless of minimum
+        let claimable = client.get_claimable(&stream_id);
+        assert_eq!(
+            claimable, 500,
+            "get_claimable should ignore minimum restriction"
         );
     }
 }
