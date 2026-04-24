@@ -1563,7 +1563,10 @@ mod tests {
 
         // Step 4: 9% increase → 10_900_000; deviation = (900_000 * 10_000) / 10_000_000 = 900 bps <= 1000 → accepted
         let result = client.try_submit_price(&base, &quote, &10_900_000);
-        assert!(result.is_ok(), "9% increase must be accepted within 10% threshold");
+        assert!(
+            result.is_ok(),
+            "9% increase must be accepted within 10% threshold"
+        );
         assert_eq!(client.get_price_unsafe(&base, &quote).price, 10_900_000);
 
         // Step 5: 17% decrease from 10_900_000 → 9_000_000
@@ -1587,5 +1590,84 @@ mod tests {
             "previously blocked price must succeed after disabling circuit breaker"
         );
         assert_eq!(client.get_price_unsafe(&base, &quote).price, 9_000_000);
+    }
+
+    /// Test that get_price() and get_price_unsafe() return identical PriceData when price is fresh,
+    /// and that get_price() reverts with PriceStale while get_price_unsafe() returns stale data after threshold.
+    #[test]
+    fn test_get_price_and_get_price_unsafe_fresh_and_stale_behavior() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        // Set up with known timestamp and threshold
+        let submit_time = 1000u64;
+        let staleness_threshold = 3600u64;
+        env.ledger().with_mut(|l| l.timestamp = submit_time);
+        let (_, client) = setup(&env); // uses 3600 threshold by default
+
+        let base = Symbol::new(&env, "XLM");
+        let quote = Symbol::new(&env, "USDC");
+        let price = 25_000_000i128; // 2.5 USDC per XLM
+
+        // Task 1: Submit a price at a known timestamp
+        client.submit_price(&base, &quote, &price);
+
+        // Task 2: While price is fresh, call both functions and assert identical results
+        let fresh_data_safe = client.get_price(&base, &quote);
+        let fresh_data_unsafe = client.get_price_unsafe(&base, &quote);
+
+        // Assert price_data.price is identical from both calls
+        assert_eq!(
+            fresh_data_safe.price, fresh_data_unsafe.price,
+            "get_price() and get_price_unsafe() should return identical price when fresh"
+        );
+        assert_eq!(
+            fresh_data_safe.price, price,
+            "Price should match submitted value"
+        );
+
+        // Assert price_data.updated_at is identical from both calls
+        assert_eq!(
+            fresh_data_safe.updated_at, fresh_data_unsafe.updated_at,
+            "get_price() and get_price_unsafe() should return identical updated_at when fresh"
+        );
+        assert_eq!(
+            fresh_data_safe.updated_at, submit_time,
+            "updated_at should match submission timestamp"
+        );
+
+        // Task 3: Advance past staleness threshold and assert get_price() reverts
+        let stale_time = submit_time + staleness_threshold + 100; // 100 seconds past threshold
+        env.ledger().with_mut(|l| l.timestamp = stale_time);
+
+        let result = client.try_get_price(&base, &quote);
+        assert_eq!(
+            result,
+            Err(Ok(OracleError::PriceStale)),
+            "get_price() should revert with PriceStale when price is stale"
+        );
+
+        // Task 4: Assert get_price_unsafe() still returns the same stale data
+        let stale_data_unsafe = client.get_price_unsafe(&base, &quote);
+
+        // Should return the same price and updated_at as when fresh
+        assert_eq!(
+            stale_data_unsafe.price, price,
+            "get_price_unsafe() should return the same price even when stale"
+        );
+        assert_eq!(
+            stale_data_unsafe.updated_at, submit_time,
+            "get_price_unsafe() should return the same updated_at even when stale"
+        );
+
+        // Verify the stale data matches the original fresh data from get_price_unsafe()
+        assert_eq!(
+            stale_data_unsafe.price, fresh_data_unsafe.price,
+            "Stale price should match fresh price from get_price_unsafe()"
+        );
+        assert_eq!(
+            stale_data_unsafe.updated_at, fresh_data_unsafe.updated_at,
+            "Stale updated_at should match fresh updated_at from get_price_unsafe()"
+        );
     }
 }
