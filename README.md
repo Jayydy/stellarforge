@@ -2,7 +2,7 @@
 
 **Reusable Soroban smart contract primitives for the Stellar ecosystem.**
 
-StellarForge is a collection of production-ready, well-tested Soroban contracts that developers can deploy directly or use as building blocks for more complex DeFi applications on Stellar.
+StellarForge is a collection of production-ready, well-tested smart contracts built on [Soroban](https://developers.stellar.org/docs/smart-contracts/overview) — Stellar's Rust-based smart contract platform. Each contract is a self-contained primitive (vesting, streaming payments, multisig, governance, and price feeds) that you can deploy as-is or compose into larger DeFi applications. All contracts are written in safe Rust with no external dependencies beyond the Soroban SDK, and every error path and state transition is covered by tests.
 
 ---
 
