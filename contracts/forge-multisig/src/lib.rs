@@ -1317,6 +1317,40 @@ mod tests {
     }
 
     #[test]
+    fn test_get_approval_count_full_lifecycle_including_execution() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(&env, &contract_id);
+        let o1 = Address::generate(&env);
+        let o2 = Address::generate(&env);
+        let o3 = Address::generate(&env);
+        client.initialize(&vec![&env, o1.clone(), o2.clone(), o3.clone()], &3, &3600);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let to = Address::generate(&env);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &500);
+
+        let pid = client.propose(&o1, &to, &token_id, &500);
+        assert_eq!(client.get_approval_count(&pid), 1);
+
+        client.approve(&o2, &pid);
+        assert_eq!(client.get_approval_count(&pid), 2);
+
+        client.approve(&o3, &pid);
+        assert_eq!(client.get_approval_count(&pid), 3);
+
+        env.ledger().with_mut(|l| l.timestamp = 1000 + 3600 + 1);
+        client.execute(&o1, &pid);
+        assert_eq!(client.get_approval_count(&pid), 3);
+    }
+
+    #[test]
     fn test_rejected_proposal_cannot_execute() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1373,6 +1407,41 @@ mod tests {
         let proposal = client.get_proposal(&pid).unwrap();
         assert!(!proposal.executed);
         assert_eq!(proposal.rejection_count, 2);
+    }
+
+    #[test]
+    fn test_get_approval_count_rejected_proposal_returns_approvals_at_rejection_time() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(&env, &contract_id);
+        let o1 = Address::generate(&env);
+        let o2 = Address::generate(&env);
+        let o3 = Address::generate(&env);
+        let o4 = Address::generate(&env);
+
+        client.initialize(
+            &vec![&env, o1.clone(), o2.clone(), o3.clone(), o4.clone()],
+            &3,
+            &3600,
+        );
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let to = Address::generate(&env);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &500);
+
+        let pid = client.propose(&o1, &to, &token_id, &500);
+        client.approve(&o4, &pid);
+        assert_eq!(client.get_approval_count(&pid), 2);
+
+        client.reject(&o2, &pid);
+        client.reject(&o3, &pid);
+        assert_eq!(client.get_approval_count(&pid), 2);
     }
 
     /// Test mixed approval/rejection scenario where threshold is still reached

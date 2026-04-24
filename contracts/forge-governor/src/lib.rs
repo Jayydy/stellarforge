@@ -396,7 +396,7 @@ impl GovernorContract {
         }
 
         let now = env.ledger().timestamp();
-        if now > proposal.vote_end {
+        if now >= proposal.vote_end {
             return Err(GovernorError::VotingClosed);
         }
 
@@ -480,7 +480,7 @@ impl GovernorContract {
         }
 
         let now = env.ledger().timestamp();
-        if now <= proposal.vote_end {
+        if now < proposal.vote_end {
             return Err(GovernorError::VotingStillOpen);
         }
 
@@ -905,7 +905,7 @@ impl GovernorContract {
                 .get::<DataKey, Proposal>(&DataKey::Proposal(id))
             {
                 // Exclude cancelled proposals and expired voting windows
-                if proposal.state != ProposalState::Cancelled && now <= proposal.vote_end {
+                if proposal.state != ProposalState::Cancelled && now < proposal.vote_end {
                     pending.push_back(id);
                 }
             }
@@ -1937,6 +1937,58 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert!(pending.contains(pid1));
         assert!(pending.contains(pid2));
+    }
+
+    #[test]
+    fn test_get_pending_proposals_voting_period_one_immediate_finalize_boundary() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        let contract_id = env.register_contract(None, GovernorContract);
+        let client = GovernorContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        let config = GovernorConfig {
+            admin: admin.clone(),
+            vote_token: token_id,
+            voting_period: 1,
+            quorum: 100,
+            timelock_delay: 86400,
+        };
+        client.initialize(&config);
+
+        let proposer = Address::generate(&env);
+
+        // t=0 create pid_0
+        let pid_0 = client.propose(
+            &proposer,
+            &String::from_str(&env, "P0"),
+            &String::from_str(&env, "D"),
+        );
+
+        // Advance to t=1 — voting period has ended (vote_end == 1)
+        env.ledger().with_mut(|l| l.timestamp = 1);
+        let pending = client.get_pending_proposals();
+        assert_eq!(pending.len(), 0);
+
+        // Finalize pid_0 at the boundary timestamp
+        client.finalize(&pid_0);
+
+        // Create pid_1 at t=1
+        let pid_1 = client.propose(
+            &proposer,
+            &String::from_str(&env, "P1"),
+            &String::from_str(&env, "D"),
+        );
+
+        // Only pid_1 should be pending; pid_0 must not reappear after finalization
+        let pending = client.get_pending_proposals();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(pid_1));
+        assert!(!pending.contains(pid_0));
     }
 
     // ── Tie-breaking behaviour ─────────────────────────────────────────────────

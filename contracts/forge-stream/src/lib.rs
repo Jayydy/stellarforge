@@ -1485,6 +1485,42 @@ mod tests {
     }
 
     #[test]
+    fn test_get_claimable_zero_immediately_after_withdraw_then_accrues_again() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let rate = 100i128;
+        let duration = 1_000u64;
+        let total = rate * duration as i128;
+        let token = setup_token(&env, &sender, total);
+
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
+
+        env.ledger().with_mut(|l| l.timestamp += 100);
+        assert_eq!(client.get_claimable(&stream_id), rate * 100);
+        let status_before = client.get_stream_status(&stream_id);
+        assert_eq!(status_before.withdrawable, rate * 100);
+
+        client.withdraw(&stream_id);
+
+        // Without time passing, claimable should now be 0
+        assert_eq!(client.get_claimable(&stream_id), 0);
+        let status_after = client.get_stream_status(&stream_id);
+        assert_eq!(status_after.withdrawable, 0);
+
+        // Advance time and only newly accrued tokens should be claimable
+        env.ledger().with_mut(|l| l.timestamp += 50);
+        assert_eq!(client.get_claimable(&stream_id), rate * 50);
+        let status_later = client.get_stream_status(&stream_id);
+        assert_eq!(status_later.withdrawable, rate * 50);
+    }
+
+    #[test]
     fn test_active_streams_count_tracks_create_and_cancel() {
         let env = Env::default();
         env.mock_all_auths();
