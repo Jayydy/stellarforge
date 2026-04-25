@@ -317,6 +317,18 @@ impl ForgeStream {
         }
 
         stream.withdrawn += withdrawable;
+
+        // Expiry detection: decrement the active counter once when the stream
+        // has fully elapsed. This is the only place expiry is detected so that
+        // get_active_streams_count() never needs an O(n) scan.
+        if is_finished && stream.counted_active {
+            stream.counted_active = false;
+            Self::set_active_streams_count(
+                &env,
+                Self::active_streams_count(&env).saturating_sub(1),
+            );
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
@@ -673,11 +685,11 @@ impl ForgeStream {
 
     /// Return the number of currently active streams.
     ///
-    /// Active streams are not cancelled and have not fully elapsed.
-    /// This method also synchronizes the counter for any streams that elapsed
-    /// since the last interaction.
+    /// The counter is maintained incrementally: incremented on `create_stream`,
+    /// decremented on `cancel_stream` and on `withdraw` when the stream has
+    /// fully elapsed. No O(n) scan is performed.
     pub fn get_active_streams_count(env: Env) -> u64 {
-        Self::sync_elapsed_streams(&env)
+        Self::active_streams_count(&env)
     }
 
     /// Return the total number of streams ever created.
@@ -934,39 +946,6 @@ impl ForgeStream {
             .set(&DataKey::ActiveStreamsCount, &count);
     }
 
-    fn sync_elapsed_streams(env: &Env) -> u64 {
-        let now = env.ledger().timestamp();
-        let next_id: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::NextId)
-            .unwrap_or(0_u64);
-        let mut active_count = Self::active_streams_count(env);
-
-        let mut stream_id = 0_u64;
-        while stream_id < next_id {
-            let maybe_stream: Option<Stream> =
-                env.storage().persistent().get(&DataKey::Stream(stream_id));
-            if let Some(mut stream) = maybe_stream {
-                if stream.counted_active && !stream.cancelled && now >= stream.end_time {
-                    stream.counted_active = false;
-                    env.storage()
-                        .persistent()
-                        .set(&DataKey::Stream(stream_id), &stream);
-                    env.storage().persistent().extend_ttl(
-                        &DataKey::Stream(stream_id),
-                        17280,
-                        34560,
-                    );
-                    active_count = active_count.saturating_sub(1);
-                }
-            }
-            stream_id += 1;
-        }
-
-        Self::set_active_streams_count(env, active_count);
-        active_count
-    }
 }
 
 #[cfg(test)]
@@ -1569,14 +1548,19 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        client.create_stream(&sender, &token.address, &recipient, &10, &100);
-        client.create_stream(&sender, &token.address, &recipient, &20, &300);
+        let stream_a = client.create_stream(&sender, &token.address, &recipient, &10, &100);
+        let stream_b = client.create_stream(&sender, &token.address, &recipient, &20, &300);
         assert_eq!(client.get_active_streams_count(), 2);
 
+        // Advance past stream_a's end_time (100s) but not stream_b's (300s).
+        // Expiry is detected on withdraw(), not by a background scan.
         env.ledger().with_mut(|l| l.timestamp += 150);
+        client.withdraw(&stream_a); // triggers expiry decrement for stream_a
         assert_eq!(client.get_active_streams_count(), 1);
 
+        // Advance past stream_b's end_time and withdraw to trigger its expiry.
         env.ledger().with_mut(|l| l.timestamp += 200);
+        client.withdraw(&stream_b); // triggers expiry decrement for stream_b
         assert_eq!(client.get_active_streams_count(), 0);
     }
 
@@ -2205,7 +2189,55 @@ mod tests {
         assert_eq!(recipient2_streams.get(0).unwrap(), stream_id2);
     }
 
-    /// Test that get_stream_status().streamed returns the correct historical value after cancel.
+    /// 20 streams: 10 short (duration=100s) and 10 long (duration=1000s).
+    /// After advancing past the short streams' end_time, withdrawing from each
+    /// short stream triggers the expiry decrement. get_active_streams_count()
+    /// must return 10 without any O(n) scan.
+    #[test]
+    fn test_active_streams_count_20_streams_half_elapsed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        // 10 short streams: 100 * 100 = 10_000 each
+        // 10 long  streams: 100 * 1000 = 100_000 each  → total = 1_100_000
+        StellarAssetClient::new(&env, &token_id).mint(&sender, &1_100_000i128);
+
+        let mut short_ids = soroban_sdk::Vec::new(&env);
+        for _ in 0..10 {
+            let recipient = Address::generate(&env);
+            let id = client.create_stream(&sender, &token_id, &recipient, &100, &100);
+            short_ids.push_back(id);
+        }
+        for _ in 0..10 {
+            let recipient = Address::generate(&env);
+            client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+        }
+
+        assert_eq!(client.get_active_streams_count(), 20);
+
+        // Advance past the short streams' end_time (100s).
+        env.ledger().with_mut(|l| l.timestamp = 200);
+
+        // Count is still 20 — no background scan, expiry only on withdraw().
+        assert_eq!(client.get_active_streams_count(), 20);
+
+        // Withdraw from each short stream to trigger expiry decrements.
+        for i in 0..10u32 {
+            client.withdraw(&short_ids.get(i).unwrap());
+        }
+
+        // Now the counter must reflect exactly 10 active (the long streams).
+        assert_eq!(client.get_active_streams_count(), 10);
+    }
+
     #[test]
     fn test_get_stream_status_streamed_after_cancel() {
         let env = Env::default();
