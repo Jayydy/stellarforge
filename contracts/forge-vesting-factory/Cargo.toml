@@ -1,3 +1,11 @@
+# forge-vesting-factory - Factory contract that manages multiple vesting schedules
+#
+# Features:
+# - Create vesting schedules for multiple beneficiaries without deploying separate contracts
+# - Each schedule has its own token, beneficiary, admin, cliff, and duration
+# - Beneficiaries call claim(schedule_id) to withdraw unlocked tokens
+# - Reduces deployment costs dramatically for multi-beneficiary vesting
+
 [package]
 name = "forge-vesting-factory"
 version = "0.1.0"
@@ -9,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "../../crates/forge-errors" }
+forge-constants = { path = "../../crates/forge-constants" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

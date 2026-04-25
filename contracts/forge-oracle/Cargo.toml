@@ -1,3 +1,11 @@
+# forge-oracle - Standardized price feed interface for Stellar/Soroban contracts
+#
+# Features:
+# - Admin-controlled price submissions with staleness protection
+# - Multiple asset pairs supported per deployment
+# - Configurable staleness threshold — reads revert if price is too old
+# - Event emission on every price update
+
 [package]
 name = "forge-oracle"
 version = "0.1.0"
@@ -9,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "../../crates/forge-errors" }
+forge-constants = { path = "../../crates/forge-constants" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

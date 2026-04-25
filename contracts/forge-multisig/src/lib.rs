@@ -8,13 +8,11 @@
 //! - Owners can propose, approve, reject, and execute transactions
 //! - Native token support via Stellar token interface
 
+use forge_constants::{error_codes, ttl};
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec,
 };
-
-const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
-const INSTANCE_TTL_EXTEND: u32 = 34_560;
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -74,15 +72,13 @@ pub struct Proposal {
 pub enum MultisigError {
     #[from(CommonError)]
     Common(CommonError),
-    AlreadyVoted = 5,
-    TimelockNotElapsed = 6,
-    AlreadyExecuted = 7,
-    AlreadyCancelled = 8,
-    InsufficientApprovals = 9,
-    InvalidThreshold = 10,
-    InvalidAmount = 11,
-    CannotCancel = 12,
-    InsufficientFunds = 13,
+    ProposalNotFound = error_codes::multisig::PROPOSAL_NOT_FOUND,
+    Unauthorized = error_codes::multisig::UNAUTHORIZED,
+    AlreadyExecuted = error_codes::multisig::ALREADY_EXECUTED,
+    TimedOut = error_codes::multisig::TIMED_OUT,
+    AlreadyApproved = error_codes::multisig::ALREADY_APPROVED,
+    InsufficientApprovals = error_codes::multisig::INSUFFICIENT_APPROVALS,
+    InvalidThreshold = error_codes::multisig::INVALID_THRESHOLD,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -476,7 +472,7 @@ impl MultisigContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage()
             .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            .extend_ttl(ttl::INSTANCE_TTL_THRESHOLD, ttl::INSTANCE_TTL_EXTEND);
 
         env.events().publish(
             (Symbol::new(&env, "proposal_approved"),),

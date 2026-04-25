@@ -1,3 +1,11 @@
+# forge-stream - Real-time token streaming — pay-per-second token transfers on Soroban
+#
+# Features:
+# - Sender creates a stream with a rate (tokens per second) and duration
+# - Recipient can withdraw accrued tokens at any time
+# - Sender can cancel and reclaim unstreamed tokens
+# - Multiple streams can run in parallel (keyed by stream_id)
+
 [package]
 name = "forge-stream"
 version = "0.1.0"
@@ -9,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "../../crates/forge-errors" }
+forge-constants = { path = "../../crates/forge-constants" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

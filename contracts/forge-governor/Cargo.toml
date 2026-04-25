@@ -1,3 +1,11 @@
+# forge-governor - On-chain governance with token-weighted voting for Stellar/Soroban
+#
+# Features:
+# - Token-weighted proposal voting (1 token = 1 vote)
+# - Configurable voting period and quorum
+# - Timelock between approval and execution
+# - Anyone can propose; execution is permissionless once passed
+
 [package]
 name = "forge-governor"
 version = "0.1.0"
@@ -9,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "../../crates/forge-errors" }
+forge-constants = { path = "../../crates/forge-constants" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

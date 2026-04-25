@@ -9,6 +9,7 @@
 //! - Configurable staleness threshold — reads revert if price is too old
 //! - Event emission on every price update
 
+use forge_constants::error_codes;
 use forge_errors::CommonError;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
@@ -58,12 +59,12 @@ pub struct PriceEntry {
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum OracleError {
-    AlreadyInitialized = 1,
-    NotInitialized = 2,
-    Unauthorized = 3,
-    PriceNotFound = 4,
-    PriceStale = 5,
-    InvalidPrice = 6,
+    AlreadyInitialized = error_codes::ALREADY_INITIALIZED,
+    NotInitialized = error_codes::NOT_INITIALIZED,
+    Unauthorized = error_codes::UNAUTHORIZED,
+    PriceNotFound = error_codes::oracle::PRICE_NOT_FOUND,
+    StaleData = error_codes::oracle::STALE_DATA,
+    InvalidPrice = error_codes::oracle::INVALID_PRICE,
     InvalidPair = 7,
     PriceDeviationTooHigh = 8,
 }

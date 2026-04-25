@@ -1,8 +1,15 @@
+# StellarForge - Reusable Soroban smart contract primitives for the Stellar ecosystem
+# 
+# This workspace contains production-ready, well-tested smart contracts built on Soroban.
+# Each contract is a self-contained primitive (vesting, streaming payments, multisig, 
+# governance, and price feeds) that can be deployed as-is or composed into larger DeFi applications.
+
 [workspace]
 resolver = "2"
 
 members = [
     "crates/forge-errors",
+    "crates/forge-constants",
     "contracts/forge-vesting",
     "contracts/forge-vesting-factory",
     "contracts/forge-stream",
@@ -14,6 +21,7 @@ members = [
 [workspace.dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "crates/forge-errors" }
+forge-constants = { path = "crates/forge-constants" }
 
 [profile.release]
 opt-level = "z"
