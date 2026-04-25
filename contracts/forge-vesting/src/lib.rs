@@ -199,6 +199,7 @@ impl ForgeVesting {
     /// # Errors
     /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
     /// - [`VestingError::Cancelled`] — The vesting schedule was cancelled by the admin.
+    /// - [`VestingError::Paused`] — The vesting schedule is currently paused.
     /// - [`VestingError::CliffNotReached`] — Current time is before `start_time + cliff_seconds`.
     /// - [`VestingError::NothingToClaim`] — All vested tokens have already been claimed.
     ///
@@ -219,7 +220,7 @@ impl ForgeVesting {
         }
 
         if config.paused {
-            return Err(VestingError::Common(CommonError::Unauthorized));
+            return Err(VestingError::Paused);
         }
 
         config.beneficiary.require_auth();
@@ -359,7 +360,7 @@ impl ForgeVesting {
             return Err(VestingError::Cancelled);
         }
         if config.paused {
-            return Err(VestingError::Common(CommonError::Unauthorized));
+            return Err(VestingError::Paused);
         }
 
         config.admin.require_auth();
@@ -635,6 +636,7 @@ impl ForgeVesting {
     ///
     /// # Errors
     /// - [`VestingError::NotInitialized`] — Contract not initialized.
+    /// - [`VestingError::Cancelled`] — The vesting schedule has been cancelled.
     /// - [`VestingError::Paused`] — Already paused.
     pub fn pause(env: Env) -> Result<(), VestingError> {
         let mut config: VestingConfig = env
@@ -650,7 +652,7 @@ impl ForgeVesting {
         }
 
         if config.paused {
-            return Err(VestingError::Common(CommonError::Unauthorized));
+            return Err(VestingError::Paused);
         }
 
         config.paused = true;
@@ -668,7 +670,8 @@ impl ForgeVesting {
     ///
     /// # Errors
     /// - [`VestingError::NotInitialized`] — Contract not initialized.
-    /// - [`VestingError::NotPaused`] — Not currently paused.
+    /// - [`VestingError::Cancelled`] — The vesting schedule has been cancelled.
+    /// - [`VestingError::NotPaused`] — Schedule is not currently paused.
     pub fn unpause(env: Env) -> Result<(), VestingError> {
         let mut config: VestingConfig = env
             .storage()
@@ -683,7 +686,7 @@ impl ForgeVesting {
         }
 
         if !config.paused {
-            return Err(VestingError::Common(CommonError::NotInitialized));
+            return Err(VestingError::NotPaused);
         }
 
         let now = env.ledger().timestamp();
@@ -1713,7 +1716,7 @@ mod tests {
     // ── Pause / Unpause Tests ─────────────────────────────────────────────────
 
     /// Test 1: Admin pauses at 50% vesting. Verify get_status shows amount frozen
-    /// and claim() fails with Paused.
+    /// and claim() fails with VestingError::Paused.
     #[test]
     fn test_pause_freezes_vested_amount_and_blocks_claim() {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
@@ -1729,7 +1732,7 @@ mod tests {
         assert!(status.paused);
         assert_eq!(status.vested, 500_000); // frozen at 50%
 
-        // claim must fail
+        // claim must fail with Paused, not Unauthorized
         assert_eq!(client.try_claim(), Err(Ok(VestingError::Paused)));
     }
 

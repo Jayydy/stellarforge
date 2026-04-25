@@ -153,8 +153,7 @@ pub enum GovernorError {
     AlreadyCancelled = 12,
     InvalidWeight = 13,
     AlreadyFinalized = 14,
-    Unauthorized = 14,
-    AlreadyFinalized = 15,
+    Unauthorized = 15,
     VoteNotFound = 16,
 }
 
@@ -299,17 +298,25 @@ impl GovernorContract {
         // Track active proposal ID for O(1) get_pending_proposals
         let mut active: Vec<u64> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ActiveProposals)
             .unwrap_or_else(|| Vec::new(&env));
         let index = active.len();
         active.push_back(proposal_id);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::ActiveProposals, &active);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::ActiveProposalIndex(proposal_id), &index);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveProposals, PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveProposalIndex(proposal_id),
+            PROPOSAL_TTL_EXTEND,
+            PROPOSAL_TTL_EXTEND,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "proposal_created"),),
@@ -374,6 +381,11 @@ impl GovernorContract {
             .get(&DataKey::Config)
             .ok_or(GovernorError::Common(CommonError::NotInitialized))?;
 
+        // Reject zero or negative weight before any storage reads or token calls.
+        if weight <= 0 {
+            return Err(GovernorError::InvalidWeight);
+        }
+
         // Enforce 1-token-1-vote: reject if claimed weight exceeds actual balance.
         let actual_balance = token::Client::new(&env, &config.vote_token).balance(&voter);
         if weight > actual_balance {
@@ -398,10 +410,6 @@ impl GovernorContract {
         let now = env.ledger().timestamp();
         if now >= proposal.vote_end {
             return Err(GovernorError::VotingClosed);
-        }
-
-        if weight <= 0 {
-            return Err(GovernorError::InvalidWeight);
         }
 
         match direction {
@@ -891,7 +899,7 @@ impl GovernorContract {
     pub fn get_pending_proposals(env: Env) -> Vec<u64> {
         let active: Vec<u64> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ActiveProposals)
             .unwrap_or_else(|| Vec::new(&env));
 
@@ -916,17 +924,17 @@ impl GovernorContract {
 
     fn remove_active_proposal(env: &Env, proposal_id: u64) {
         let index_key = DataKey::ActiveProposalIndex(proposal_id);
-        let Some(index) = env.storage().instance().get::<DataKey, u32>(&index_key) else {
+        let Some(index) = env.storage().persistent().get::<DataKey, u32>(&index_key) else {
             return;
         };
 
         let mut active: Vec<u64> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ActiveProposals)
             .unwrap_or_else(|| Vec::new(env));
         if active.is_empty() {
-            env.storage().instance().remove(&index_key);
+            env.storage().persistent().remove(&index_key);
             return;
         }
 
@@ -935,15 +943,23 @@ impl GovernorContract {
             let last_id = active.get(last_index).unwrap();
             active.set(index, last_id);
             env.storage()
-                .instance()
+                .persistent()
                 .set(&DataKey::ActiveProposalIndex(last_id), &index);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveProposalIndex(last_id),
+                PROPOSAL_TTL_EXTEND,
+                PROPOSAL_TTL_EXTEND,
+            );
         }
 
         active.remove(last_index);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::ActiveProposals, &active);
-        env.storage().instance().remove(&index_key);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveProposals, PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().remove(&index_key);
     }
 }
 
@@ -1560,7 +1576,7 @@ mod tests {
             &String::from_str(&env, "P"),
             &String::from_str(&env, "D"),
         );
-        client.vote(&voter, &pid, &true, &200);
+        client.vote(&voter, &pid, &VoteDirection::For, &200);
 
         // Finalize at a known timestamp
         let finalize_time: u64 = 5000;
@@ -3037,6 +3053,31 @@ mod tests {
     /// Test finalize() still works correctly with Active proposals (normal case)
     #[test]
     fn test_finalize_active_proposal_still_works() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (client, token_id) = setup_with_token(&env);
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        mint(&env, &token_id, &voter, 200);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Test Proposal"),
+            &String::from_str(&env, "Description"),
+        );
+
+        // Vote and advance past voting period
+        client.vote(&voter, &pid, &VoteDirection::For, &200);
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+
+        // Finalize should work normally for Active proposals
+        let state = client.finalize(&pid);
+        assert_eq!(state, ProposalState::Passed);
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Passed);
+    }
+
     // ── Issue #335: abstain votes count toward quorum but not toward passing ──
 
     /// Scenario 1: 100 abstain votes meet quorum (100) but proposal fails because
@@ -3141,6 +3182,17 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 1000 + 3600 + 1);
         let result2 = client.try_finalize(&pid);
         assert_eq!(result2, Err(Ok(GovernorError::AlreadyCancelled)));
+    }
+
+    /// Scenario 2: 51 for + 49 abstain = 100 total meets quorum and yes majority → Passed.
+    #[test]
+    fn test_for_plus_abstain_meets_quorum_and_passes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (client, token_id) = setup_with_token(&env);
+
+        let proposer = Address::generate(&env);
         let yes_voter = Address::generate(&env);
         let abstainer = Address::generate(&env);
         mint(&env, &token_id, &yes_voter, 51);

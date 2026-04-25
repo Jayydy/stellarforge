@@ -7,8 +7,8 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-soroban-sdk = { workspace = true }
-forge-errors = { workspace = true }
+soroban-sdk = { version = "21.7.6" }
+forge-errors = { path = "../../crates/forge-errors" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

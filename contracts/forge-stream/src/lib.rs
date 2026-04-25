@@ -3350,6 +3350,54 @@ mod tests {
         );
     }
 
+    /// extend_stream() by a non-sender must revert with Unauthorized.
+    #[test]
+    fn test_extend_stream_non_sender_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let non_sender = Address::generate(&env);
+        let token = setup_token(&env, &sender, 200_000);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+
+        // Clear all auths and only authorize non_sender for extend_stream
+        env.mock_all_auths();
+        non_sender.require_auth();
+
+        // Try to extend as non-sender
+        let result = client.try_extend_stream(&stream_id, &500);
+        assert_eq!(result, Err(Ok(StreamError::Unauthorized)));
+    }
+
+    /// extend_stream() with out-of-range stream ID must revert with StreamNotFound.
+    #[test]
+    fn test_extend_stream_out_of_range_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 200_000);
+
+        // Create one stream to get valid ID range
+        let valid_stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+
+        // Try extending with non-existent stream ID
+        let result = client.try_extend_stream(&999, &500);
+        assert_eq!(result, Err(Ok(StreamError::StreamNotFound)));
+
+        // Try extending with stream_id that equals next_id (out of range)
+        let result = client.try_extend_stream(&(valid_stream_id + 1), &500);
+        assert_eq!(result, Err(Ok(StreamError::StreamNotFound)));
+    }
+
     // ── Minimum withdrawal amount tests ───────────────────────────────────────
 
     /// Withdrawal below minimum should be rejected with BelowMinimumWithdrawal error

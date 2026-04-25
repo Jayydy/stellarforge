@@ -9,7 +9,6 @@ members = [
     "contracts/forge-multisig",
     "contracts/forge-governor",
     "contracts/forge-oracle",
-    "benches",
 ]
 
 [workspace.dependencies]
