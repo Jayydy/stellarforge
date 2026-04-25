@@ -2,7 +2,9 @@
 resolver = "2"
 
 members = [
+    "crates/forge-errors",
     "contracts/forge-vesting",
+    "contracts/forge-vesting-factory",
     "contracts/forge-stream",
     "contracts/forge-multisig",
     "contracts/forge-governor",
@@ -11,6 +13,7 @@ members = [
 
 [workspace.dependencies]
 soroban-sdk = { version = "21.7.6" }
+forge-errors = { path = "crates/forge-errors" }
 
 [profile.release]
 opt-level = "z"

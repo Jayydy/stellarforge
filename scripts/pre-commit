@@ -1,0 +1,30 @@
+#!/bin/bash
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "Checking code formatting..."
+if ! cargo fmt --all -- --check; then
+    echo "❌ Code formatting check failed. Run 'cargo fmt --all' to fix."
+    exit 1
+fi
+
+# Run clippy
+echo "Running clippy..."
+if ! cargo clippy --all-targets -- -D warnings; then
+    echo "❌ Clippy found issues. Fix them before committing."
+    exit 1
+fi
+
+# Run tests (controlled by FORGE_PRECOMMIT_TESTS env var)
+# Set FORGE_PRECOMMIT_TESTS=1 to enable: FORGE_PRECOMMIT_TESTS=1 git commit
+if [ "${FORGE_PRECOMMIT_TESTS:-0}" = "1" ]; then
+    echo "Running tests (FORGE_PRECOMMIT_TESTS=1)..."
+    if ! cargo test --workspace; then
+        echo "❌ Tests failed. Fix them before committing."
+        exit 1
+    fi
+fi
+
+echo "✅ All pre-commit checks passed!"
+exit 0

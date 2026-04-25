@@ -2,11 +2,131 @@
 
 **Reusable Soroban smart contract primitives for the Stellar ecosystem.**
 
-StellarForge is a collection of production-ready, well-tested Soroban contracts that developers can deploy directly or use as building blocks for more complex DeFi applications on Stellar.
+StellarForge is a collection of production-ready, well-tested smart contracts built on [Soroban](https://developers.stellar.org/docs/smart-contracts/overview) — Stellar's Rust-based smart contract platform. Each contract is a self-contained primitive (vesting, streaming payments, multisig, governance, and price feeds) that you can deploy as-is or compose into larger DeFi applications. All contracts are written in safe Rust with no external dependencies beyond the Soroban SDK, and every error path and state transition is covered by tests.
 
 ---
 
-## 📊 Contract Comparison
+## 📦 Installation
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+| :--- | :--- | :--- |
+| [Rust](https://rustup.rs/) | stable (2021 edition) | Install via `rustup` |
+| WASM target `wasm32v1-none` | — | Required by the Soroban runtime |
+| [Stellar CLI](https://developers.stellar.org/docs/smart-contracts/getting-started/setup) | ≥ 25.2.0 | Used to build, deploy, and invoke contracts |
+
+### Install dependencies
+
+```bash
+# 1. Install Rust (skip if already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 2. Add the WebAssembly target
+rustup target add wasm32v1-none
+
+# 3. Install the Stellar CLI
+cargo install --locked stellar-cli
+```
+
+### Get the code and build
+
+```bash
+git clone https://github.com/Austinaminu2/stellarforge.git
+cd stellarforge
+make build
+```
+
+For a full walkthrough including running tests and deploying to testnet, see the [Prerequisites & Setup](#️-prerequisites--setup) section.
+
+---
+
+## 🖼️ Project Screenshots
+
+### Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "StellarForge Ecosystem"
+        A[forge-vesting] --> D[Stellar Network]
+        B[forge-stream] --> D
+        C[forge-multisig] --> D
+        E[forge-governor] --> D
+        F[forge-oracle] --> D
+        G[forge-vesting-factory] --> D
+    end
+    
+    subgraph "Core Components"
+        H[forge-errors] --> A
+        H --> B
+        H --> C
+        H --> E
+        H --> F
+        H --> G
+    end
+    
+    I[DeFi Applications] --> A
+    I --> B
+    I --> C
+    I --> E
+    I --> F
+    I --> G
+```
+
+*StellarForge provides a modular suite of production-ready smart contracts for the Stellar ecosystem.*
+
+### Contract Interaction Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Governor as forge-governor
+    participant Multisig as forge-multisig
+    participant Stream as forge-stream
+    participant Vesting as forge-vesting
+    
+    User->>Governor: Create proposal
+    Governor->>Multisig: Execute approved proposal
+    Multisig->>Stream: Create payment stream
+    Stream->>Vesting: Fund vesting schedule
+    Vesting->>User: Release vested tokens
+```
+
+*Visual representation of how different StellarForge contracts interact with each other.*
+
+### Vesting Schedule Visualization
+
+```mermaid
+gantt
+    title Token Vesting Schedule
+    dateFormat  YYYY-MM-DD
+    section Cliff Period
+    No tokens released :active, cliff, 2024-01-01, 90d
+    section Linear Vesting
+    Gradual release :vest, after cliff, 2024-04-01, 270d
+    section Fully Vested
+    All tokens available :done, 2025-01-01, 1d
+```
+
+*Example of a typical vesting schedule with cliff period and linear vesting.*
+
+### Streaming Payment Interface
+
+```mermaid
+graph LR
+    A[Sender] -->|Rate: 1 XLM/sec| B[forge-stream]
+    B -->|Continuous flow| C[Recipient]
+    B -->|Real-time tracking| D[Stream Dashboard]
+    D -->|Balance: 45.5 XLM| C
+    D -->|Time remaining: 2h 15m| A
+```
+
+*Real-time visualization of token streaming payments.*
+
+---
+
+## �📊 Contract Comparison
 Developers evaluating StellarForge can use this table to quickly identify the right primitive for their specific use case.
 
 | Contract | Use Case | Admin Required | Events Emitted | Timelock |
@@ -14,12 +134,75 @@ Developers evaluating StellarForge can use this table to quickly identify the ri
 | [`forge-governor`](#forge-governor) | Governance | No (Auth-based) | None | Yes (Voting/Execution delay) |
 | [`forge-multisig`](#forge-multisig) | Multisig Treasury | Yes (Owners) | None | Yes (Post-approval delay) |
 | [`forge-oracle`](#forge-oracle) | Price Feed | Yes (Admin) | `price_updated` | No |
-| [`forge-stream`](#forge-stream) | Real-time Payments | No (Stream-specific) | `stream_created`, `withdrawn`, `stream_cancelled` | No |
-| [`forge-vesting`](#forge-vesting) | Token Vesting | Yes (Admin) | `vesting_initialized`, `claimed`, `vesting_cancelled` | Yes (Cliff period) |
+| [`forge-stream`](#forge-stream) | Real-time Payments | No (Stream-specific) | `stream_created`, `withdrawn`, `stream_cancelled`, `stream_paused`, `stream_resumed` | No |
+| [`forge-vesting`](#forge-vesting) | Token Vesting | Yes (Admin) | `vesting_initialized`, `claimed`, `vesting_cancelled`, `admin_transferred` | Yes (Cliff period) |
+| [`forge-vesting-factory`](#forge-vesting-factory) | Multi-beneficiary Vesting | Yes (Per-schedule Admin) | `schedule_created`, `claimed`, `schedule_cancelled` | Yes (Cliff period) |
+---
+
+## 🔒 Audit Status
+
+**Current Status: UNAUDITED**
+
+None of the StellarForge contracts have been formally audited as of this release. While these contracts are designed with security best practices and include comprehensive test coverage, they have not undergone independent security review.
+
+### Contract Audit Status
+
+| Contract | Audit Status | Last Updated | Notes |
+| :--- | :--- | :--- | :--- |
+| `forge-governor` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-multisig` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-oracle` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-stream` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+| `forge-vesting` | ❌ Unaudited | 2026-03-26 | Not recommended for production use without prior audit |
+
+### ⚠️ Production Use Disclaimer
+
+**IMPORTANT:** These contracts are provided as-is for educational and development purposes. Before using in production:
+
+1. **Conduct your own security audit** or engage a professional auditing firm
+2. **Test extensively** on testnet with realistic scenarios
+3. **Review the code** thoroughly for your specific use case
+4. **Consider the risks** of unaudited smart contracts, including potential loss of funds
+
+We are committed to obtaining formal audits before recommending production deployment. This section will be updated when audits are completed.
 
 ---
 
-## 📜 Contract Details
+## 🏭 Real World Use Cases
+
+- `forge-vesting`: Issue employee token grants with a one-year cliff and multi-year linear vesting so early hires are rewarded for long-term commitment, while investor lockups enforce even longer vesting before secondary-market liquidity.
+- `forge-stream`: Pay contractors in real time for on-demand work with per-second streams that stop automatically at project completion, or implement subscription billing for SaaS users where tokens accrue continuously and can be withdrawn by the service provider.
+- `forge-multisig`: Manage a DAO treasury for community-approved funding requests requiring multi-owner consent, or safeguard team operational funds with 2-of-3 and 3-of-5 approval workflows to prevent single-person spending.
+- `forge-governor`: Coordinate protocol upgrades by routing proposals through a token-weighted voting process and enforcing execution delays, and tune parameters like fees or collateral ratios in a transparent governance flow.
+- `forge-oracle`: Feed DEX price data into AMM pools for accurate swap pricing and slippage control, or provide collateral valuation updates for lending markets so borrowing power adjusts to live market conditions.
+
+## � Shared Error Crate
+
+### forge-errors
+
+A shared error library providing common error variants used across all StellarForge contracts. This reduces code duplication and enables integrators to handle common error scenarios with shared logic.
+
+**Common Error Variants:**
+- `AlreadyInitialized` - Contract has already been initialized
+- `NotInitialized` - Contract has not been initialized  
+- `Unauthorized` - Caller is not authorized to perform the action
+
+**Usage in Contracts:**
+Each contract imports `forge-errors::CommonError` and re-exports the shared variants alongside contract-specific errors:
+
+```rust
+use forge_errors::CommonError;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum ContractError {
+    #[from(CommonError)]
+    Common(CommonError),
+    // Contract-specific variants...
+}
+```
+
+## �📜 Contract Details
 
 ### forge-vesting
 Deploy tokens on a vesting schedule with an optional cliff period. Perfect for team allocations or advisor tokens.
@@ -27,12 +210,30 @@ Deploy tokens on a vesting schedule with an optional cliff period. Perfect for t
 * **Key Function:** `initialize(token, beneficiary, admin, total_amount, cliff_seconds, duration_seconds)`
 * **Action:** `claim()` withdraws all currently unlocked tokens.
 * **Security:** `cancel()` allows the admin to return unvested tokens if a contributor leaves.
+* **Read functions:** Three query functions serve different audiences:
+  * `get_vesting_schedule()` — public-facing; returns token, beneficiary, amounts, and timing. No admin address or cancellation state.
+  * `get_status()` — public-facing; returns claimable amount, vested amount, cliff status, and pause state.
+  * `get_config()` — admin tooling only; returns the full internal config including admin address and cancellation flag. Prefer the two functions above for UI integrations.
+
+### forge-vesting-factory
+A single-deployment factory that manages multiple vesting schedules. Eliminates the need to deploy a separate contract per beneficiary — ideal for companies vesting tokens for many employees or investors.
+
+* **Key Function:** `create_schedule(token, beneficiary, admin, total_amount, cliff_seconds, duration_seconds) -> u64` — creates a new schedule and returns its `schedule_id`. Transfers tokens from admin into the factory on creation.
+
+📖 **[Detailed Documentation →](contracts/forge-vesting-factory/README.md)**
+* **Action:** `claim(schedule_id)` — beneficiary withdraws all currently unlocked tokens for that schedule.
+* **Security:** `cancel(schedule_id)` — admin cancels a schedule; vested tokens go to the beneficiary, unvested tokens return to the admin.
+* **Read functions:**
+  * `get_status(schedule_id)` — returns vested, claimed, claimable, cliff status, and cancellation state.
+  * `get_schedule_count()` — returns the total number of schedules ever created.
 
 ### forge-stream
 Pay-per-second token streams. Ideal for payroll, subscriptions, or real-time contractor payments.
 
 * **Key Function:** `create_stream(sender, token, recipient, rate_per_second, duration_seconds)`
 * **Action:** `withdraw(stream_id)` allows the recipient to pull accrued tokens at any time.
+* **Pause/Resume:** `pause_stream(stream_id)` and `resume_stream(stream_id)` allow senders to temporarily halt or restart token accrual.
+* **`is_active` vs `is_claimable`:** `get_stream_status()` returns both fields. A finished stream has `is_active = false` and `is_finished = true`, but may still have `withdrawable > 0`. Always check `is_claimable` (or `withdrawable` directly) to determine whether tokens can be pulled — do not rely on `is_active` alone.
 
 ### forge-multisig
 An N-of-M treasury requiring multiple owner approvals before funds move. Essential for DAO treasuries.
@@ -55,36 +256,159 @@ Admin-controlled price feeds with staleness protection for DeFi protocols.
 
 ---
 
+## 📡 Event Reference
+
+The tables below are verified against the current contract code in `contracts/*/src/lib.rs`.
+
+### forge-vesting
+
+| Event Name | Trigger | Fields |
+| :--- | :--- | :--- |
+| `vesting_initialized` | Emitted by `initialize(...)` after the vesting config and claimed amount are stored. | `total_amount: i128`, `cliff_seconds: u64`, `duration_seconds: u64` |
+| `claimed` | Emitted by `claim()` after the beneficiary's claimed amount is updated and vested tokens are transferred. | `beneficiary: Address`, `claimable: i128` |
+| `vesting_cancelled` | Emitted by `cancel()` after the vesting is marked cancelled and any unvested tokens are returned to the admin. | `admin: Address`, `returnable: i128` |
+| `admin_transferred` | Emitted by `transfer_admin(new_admin)` after admin rights move to the new admin address. | `old_admin: Address`, `new_admin: Address` |
+
+### forge-stream
+
+| Event Name | Trigger | Fields |
+| :--- | :--- | :--- |
+| `stream_created` | Emitted by `create_stream(...)` after the stream is stored and the active stream count is incremented. | `stream_id: u64`, `recipient: Address`, `rate_per_second: i128`, `duration_seconds: u64` |
+| `withdrawn` | Emitted by `withdraw(stream_id)` after the withdrawn amount is updated and accrued tokens are transferred to the recipient. | `stream_id: u64`, `recipient: Address`, `withdrawable: i128` |
+| `stream_cancelled` | Emitted by `cancel_stream(stream_id)` after the stream is marked cancelled and funds are paid out/refunded. | `stream_id: u64`, `withdrawable: i128`, `returnable: i128` |
+| `stream_paused` | Emitted by `pause_stream(stream_id)` after the stream is marked paused. | `stream_id: u64` |
+| `stream_resumed` | Emitted by `resume_stream(stream_id)` after paused time is accounted for and streaming resumes. | `stream_id: u64` |
+
+### forge-multisig
+
+| Event Name | Trigger | Fields |
+| :--- | :--- | :--- |
+| None | This contract does not currently emit any events. | None |
+
+### forge-governor
+
+| Event Name | Trigger | Fields |
+| :--- | :--- | :--- |
+| None | This contract does not currently emit any events. | None |
+
+### forge-oracle
+
+| Event Name | Trigger | Fields |
+| :--- | :--- | :--- |
+| `price_updated` | Emitted by `submit_price(base, quote, price)` after the submitted price and update timestamp are written to storage. | `base: Symbol`, `quote: Symbol`, `price: i128`, `updated_at: u64` |
+
+---
+
 ## 🛠️ Prerequisites & Setup
 
-Soroban is Stellar’s smart contract platform, built for performance and developer-friendly Rust tooling. Learn more in the [official docs](https://developers.stellar.org/docs/smart-contracts/overview).
+[Soroban](https://developers.stellar.org/docs/smart-contracts/overview) is Stellar's smart contract platform built on Rust. Follow the steps below to get your environment ready from scratch.
 
-To build and test these contracts, you will need the following tools:
+### Step 1 — Install Rust
 
-#### Rust Requirements
-- **Rust Edition:** 2021
-- **Target:** `wasm32v1-none` (v1 instruction set recommended for Soroban)
+If you don't have Rust installed, get it via [rustup](https://rustup.rs/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then restart your terminal (or run `source ~/.cargo/env`) so the `cargo` and `rustup` commands are available.
+
+### Step 2 — Add the WebAssembly target
+
+Soroban contracts compile to WebAssembly. Add the required target:
 
 ```bash
 rustup target add wasm32v1-none
 ```
 
-#### CLI Installation
-The `stellar-cli` is essential for building, deploying, and interacting with Soroban contracts. **v25.2.0 or higher** is recommended.
+> **Why?** Soroban runs contracts as WASM binaries. The `wasm32v1-none` target tells the Rust compiler to produce WASM output compatible with the Soroban runtime.
+
+### Step 3 — Install the Stellar CLI
+
+The `stellar-cli` tool lets you build, deploy, and invoke contracts. **Version 25.2.0 or higher** is required.
 
 ```bash
 cargo install --locked stellar-cli
 ```
 
-#### Funding Testnet Accounts
-Before deploying, you'll need a funded testnet account. You can generate and fund one easily:
+Verify the installation:
 
 ```bash
-stellar keys generate <identity_name> --network testnet --fund
+stellar --version
 ```
 
-### Using Make (Recommended)
-This project includes a Makefile with common development commands:
+### Step 4 — Clone the repository
+
+```bash
+git clone https://github.com/Austinaminu2/stellarforge.git
+cd stellarforge
+```
+
+### Step 5 — Build the contracts
+
+```bash
+make build
+```
+
+<details>
+<summary>Run without Make</summary>
+
+```bash
+cargo build --workspace
+stellar contract build
+```
+
+</details>
+
+### Step 6 — Run the tests
+
+```bash
+make test
+```
+
+<details>
+<summary>Run a single contract’s tests</summary>
+
+```bash
+cargo test -p forge-vesting
+cargo test -p forge-stream
+cargo test -p forge-multisig
+cargo test -p forge-governor
+cargo test -p forge-oracle
+```
+
+</details>
+
+### Step 7 — (Optional) Fund a testnet account
+
+If you want to deploy contracts to Stellar testnet, generate and fund a test identity:
+
+```bash
+stellar keys generate <your-identity-name> --network testnet --fund
+```
+
+Replace `<your-identity-name>` with any label you like (e.g., `alice`). The `--fund` flag automatically requests test tokens from the Stellar Friendbot.
+
+---
+
+## ⚙️ Optional: Environment Configuration
+
+For convenience, you can store commonly used values in a `.env` file.
+
+1. Copy the example:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Fill in values like network, identity, or contract IDs.
+
+> Note: The project does not require `.env` to run. This is only for developer convenience when working with repeated CLI commands.
+
+
+---
+
+### Make command reference
 
 | Command | Description |
 | :--- | :--- |
@@ -94,33 +418,35 @@ This project includes a Makefile with common development commands:
 | `make fmt` | Format code |
 | `make check` | Run fmt + lint + test in sequence |
 | `make clean` | Clean build artifacts |
+---
 
-### Build all contracts
+## 🚀 Testnet Deployment
 
+Ready to experiment with StellarForge contracts? We've deployed all contracts to Stellar testnet for easy testing and evaluation.
+
+**Quick Start:**
 ```bash
-make build
-# or manually:
-cargo build --workspace
-stellar contract build
+# Example: Query a price from the oracle
+stellar contract invoke \
+  --id CDLZFC3SYJYDZT7K67VZ7SHPY775YXK4XZ4Z4Z4Z4Z4Z4Z4Z4Z4Z6 \
+  --network testnet \
+  -- \
+  get_price --base XLM --quote USDC
 ```
 
-### Run all tests
+See [`docs/testnet.md`](docs/testnet.md) for:
+- Deployed contract addresses
+- Network configuration (passphrase, RPC URL)
+- Example commands for each contract
+- Instructions for deploying your own instances
 
-```bash
-make test
-# or manually:
-cargo test --workspace
-```
+---
 
-### Run a specific contract's tests
+## 🔗 Composability Guide
 
-```bash
-cargo test -p forge-vesting
-cargo test -p forge-stream
-cargo test -p forge-multisig
-cargo test -p forge-governor
-cargo test -p forge-oracle
-```
+A step-by-step walkthrough showing how to combine multiple StellarForge contracts is available in [`docs/composability.md`](docs/composability.md).
+
+The guide covers a full DAO scenario using `forge-governor`, `forge-multisig`, and `forge-stream` together, plus common composability patterns for other contract combinations.
 
 ---
 
@@ -136,6 +462,32 @@ Visual lifecycle documentation for stateful contracts is available in [`docs/sta
 
 ---
 
+## 📖 Glossary
+
+Understanding these key terms will help you work with StellarForge contracts more effectively:
+
+**Cliff** — A waiting period before any tokens become available. In [vesting](#forge-vesting), no tokens can be claimed until the cliff period expires, even though time is accruing. Common for employee token grants (e.g., 1-year cliff).
+
+**Vesting** — The gradual release of tokens over time according to a predefined schedule. After the cliff (if any), tokens unlock linearly until the full amount is available. See [`forge-vesting`](#forge-vesting).
+
+**Stream** — Continuous, per-second token flow from sender to recipient. Unlike vesting, streams have no cliff and tokens accrue in real-time. Perfect for payroll or subscriptions. See [`forge-stream`](#forge-stream).
+
+**Timelock** — A mandatory delay between approval and execution of an action. Used in [`forge-multisig`](#forge-multisig) (post-approval delay) and [`forge-governor`](#forge-governor) (voting + execution delays) to allow stakeholders time to react.
+
+**Quorum** — The minimum amount of voting power (token weight) required for a governance proposal to be valid. In [`forge-governor`](#forge-governor), proposals fail if they don't meet quorum, even with majority support.
+
+**Multisig** — Short for "multi-signature." A wallet or treasury that requires M-of-N owners to approve transactions before execution. See [`forge-multisig`](#forge-multisig).
+
+**Threshold** — The minimum number of approvals required in a multisig setup. For example, a 3-of-5 multisig has a threshold of 3, meaning 3 out of 5 owners must approve.
+
+**Price Feed** — A data source providing asset price information to smart contracts. [`forge-oracle`](#forge-oracle) allows admins to submit prices for DeFi protocols to consume.
+
+**Staleness** — How outdated price data is. In [`forge-oracle`](#forge-oracle), the staleness threshold defines the maximum age of price data before it's considered invalid and queries revert.
+
+**Staleness Threshold** — The maximum time (in seconds) that price data remains valid in [`forge-oracle`](#forge-oracle). After this period, the data is considered stale and cannot be used.
+
+---
+
 ## Design Principles
 
 - **No unsafe code** — all contracts are `#![no_std]` and fully safe Rust
@@ -146,9 +498,112 @@ Visual lifecycle documentation for stateful contracts is available in [`docs/sta
 
 ---
 
+## 📦 Versioning
+
+StellarForge contracts follow [Semantic Versioning](https://semver.org/) (SemVer) to help you manage upgrades safely.
+
+### Version Format: MAJOR.MINOR.PATCH
+
+- **MAJOR** — Breaking changes that require action from developers
+- **MINOR** — New features that are backward-compatible
+- **PATCH** — Bug fixes and internal improvements
+
+### What Counts as a Breaking Change?
+
+Breaking changes require a MAJOR version bump and include:
+
+- **Interface Changes** — Modifying function signatures, parameter types, or return values
+- **Storage Layout Changes** — Altering contract storage structure in ways that break existing deployments
+- **Behavior Changes** — Changing core logic that affects expected outcomes (e.g., calculation methods, state transitions)
+- **Error Changes** — Removing or renaming error types that external code may depend on
+- **Event Changes** — Modifying event structures or removing events that indexers rely on
+
+### Non-Breaking Changes
+
+These are safe and result in MINOR or PATCH bumps:
+
+- Adding new optional functions
+- Adding new events (without modifying existing ones)
+- Internal optimizations that don't affect external behavior
+- Bug fixes that restore intended behavior
+- Documentation improvements
+
+### Upgrade Recommendations
+
+- **Review the [CHANGELOG.md](CHANGELOG.md)** before upgrading to understand what changed
+- **Test thoroughly** on testnet before deploying MAJOR version upgrades to production
+- **Pin versions** in your deployment scripts to avoid unexpected changes
+- **Subscribe to releases** on GitHub to stay informed about security patches
+
+### Contract Independence
+
+Each contract in StellarForge is versioned independently. A breaking change in `forge-vesting` does not affect `forge-stream` versions.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style requirements, and the pull request process.
+
+## 🆘 Getting Help
+
+Stuck on something? Here's where to go:
+
+- **Bug reports** — Open an issue on [GitHub Issues](https://github.com/Austinaminu2/stellarforge/issues). Please include a minimal reproduction and the contract name.
+- **Questions & ideas** — Start a thread in [GitHub Discussions](https://github.com/Austinaminu2/stellarforge/discussions). We have dedicated spaces for Q&A, ideas, show-and-tell, and general chat.
+
+**Response time:** This is a community-maintained project. Maintainers aim to respond to issues and discussions within a few business days, but there are no guaranteed SLAs. For faster help, check if a similar issue or discussion already exists before opening a new one.
+
+## Community & Discussions
+
+Have a question, idea, or something to share? Join the conversation in [GitHub Discussions](https://github.com/soma-enyi/stellarforge/discussions) — we have dedicated spaces for Q&A, ideas, show-and-tell, and general chat.
+
+---
+
+<!-- WASM-SIZES-START -->
+## ⚙️ WASM Binary Sizes
+
+> Sizes are in bytes. Run `./scripts/update-wasm-sizes.sh` to regenerate after rebuilding contracts.
+
+| Contract | WASM Size (bytes) | WASM Size (optimized) |
+| :--- | ---: | ---: |
+| `forge-governor` | — | — |
+| `forge-multisig` | — | — |
+| `forge-oracle` | — | — |
+| `forge-stream` | — | — |
+| `forge-vesting` | — | — |
+
+> Run `./scripts/update-wasm-sizes.sh` after building to populate these values.
+
+### Optimizing with wasm-opt
+
+`wasm-opt` is part of the [Binaryen](https://github.com/WebAssembly/binaryen) toolchain.
+The `-Oz` flag instructs the optimizer to minimize binary size as aggressively as possible,
+trading compilation time for the smallest possible output.
+
+#### Install wasm-opt
+
+```bash
+# macOS (Homebrew)
+brew install binaryen
+
+# npm (cross-platform)
+npm install -g binaryen
+
+# Direct binary download
+# https://github.com/WebAssembly/binaryen/releases
+```
+
+#### Run optimization
+
+```bash
+wasm-opt -Oz \
+  target/wasm32v1-none/release/forge_governor.wasm \
+  -o target/wasm32v1-none/release/forge_governor.wasm
+```
+
+Replace `forge_governor` with the snake_case name of the contract you want to optimize.
+<!-- WASM-SIZES-END -->
 
 ---
 
