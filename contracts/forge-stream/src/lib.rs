@@ -10,7 +10,7 @@
 //! - Sender can cancel and reclaim unstreamed tokens
 //! - Multiple streams can run in parallel (keyed by stream_id)
 
-use forge_constants::error_codes;
+use forge_constants::{error_codes, test};
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -1019,7 +1019,7 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        let result = client.try_create_stream(&sender, &token.address, &recipient, &100, &1000);
+        let result = client.try_create_stream(&sender, &token.address, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), 0u64);
     }
@@ -1034,7 +1034,7 @@ mod tests {
         let recipient = Address::generate(&env);
         let token = Address::generate(&env);
 
-        let result = client.try_create_stream(&sender, &token, &recipient, &0, &1000);
+        let result = client.try_create_stream(&sender, &token, &recipient, &0, &test::MEDIUM_DURATION);
         assert_eq!(result, Err(Ok(StreamError::InvalidConfig)));
     }
 
@@ -1051,7 +1051,7 @@ mod tests {
         let recipient = Address::generate(&env);
         let token = Address::generate(&env);
 
-        let result = client.try_create_stream(&sender, &token, &recipient, &0, &1000);
+        let result = client.try_create_stream(&sender, &token, &recipient, &0, &test::MEDIUM_DURATION);
         assert_eq!(result, Err(Ok(StreamError::InvalidConfig)));
     }
 
@@ -1064,9 +1064,9 @@ mod tests {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
         // Mint only 999 tokens but the stream needs 100 * 10 = 1000
-        let token_id = setup_token(&env, &sender, 999);
+        let token_id = setup_token(&env, &sender, test::SMALL_AMOUNT - 1);
 
-        let result = client.try_create_stream(&sender, &token_id, &recipient, &100, &10);
+        let result = client.try_create_stream(&sender, &token_id, &recipient, &test::SMALL_AMOUNT, &test::SHORT_DURATION);
         assert_eq!(result, Err(Ok(StreamError::InsufficientFunds)));
     }
 
@@ -1090,7 +1090,7 @@ mod tests {
         let recipient = Address::generate(&env);
         let token = make_token(&env, &contract_id, &sender, 100_000);
 
-        let _stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        let _stream_id = client.create_stream(&sender, &token, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
 
         let token_admin = Address::generate(&env);
         let token_id = env
@@ -1100,7 +1100,7 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        let stream_id = client.create_stream(&sender, &token.address, &recipient, &100, &1000);
+        let stream_id = client.create_stream(&sender, &token.address, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
         // No time has passed — nothing to withdraw
         let result = client.try_withdraw(&stream_id);
         assert_eq!(result, Err(Ok(StreamError::NothingToWithdraw)));
@@ -1125,18 +1125,18 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        let stream_id = client.create_stream(&sender, &token.address, &recipient, &100, &1000);
+        let stream_id = client.create_stream(&sender, &token.address, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
 
         // Advance time by 100 seconds so tokens accrue
-        env.ledger().with_mut(|l| l.timestamp += 100);
+        env.ledger().with_mut(|l| l.timestamp += test::SHORT_CLIFF);
 
         // First withdraw should succeed and return 100 * 100 = 10,000
         let withdrawn_amount = client.withdraw(&stream_id);
-        assert_eq!(withdrawn_amount, 10_000);
+        assert_eq!(withdrawn_amount, test::SMALL_AMOUNT * test::SHORT_CLIFF);
 
         // Verify stream status after first withdrawal
         let status_after_first = client.get_stream_status(&stream_id);
-        assert_eq!(status_after_first.withdrawn, 10_000);
+        assert_eq!(status_after_first.withdrawn, test::SMALL_AMOUNT * test::SHORT_CLIFF);
         assert_eq!(status_after_first.withdrawable, 0);
 
         // Second withdraw without advancing time should fail with NothingToWithdraw
@@ -1145,7 +1145,7 @@ mod tests {
 
         // Verify stream status hasn't changed
         let status_after_second = client.get_stream_status(&stream_id);
-        assert_eq!(status_after_second.withdrawn, 10_000);
+        assert_eq!(status_after_second.withdrawn, test::SMALL_AMOUNT * test::SHORT_CLIFF);
         assert_eq!(status_after_second.withdrawable, 0);
     }
 
@@ -1167,13 +1167,13 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        let stream_id = client.create_stream(&sender, &token.address, &recipient, &100, &1000);
-        env.ledger().with_mut(|l| l.timestamp += 100);
+        let stream_id = client.create_stream(&sender, &token.address, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
+        env.ledger().with_mut(|l| l.timestamp += test::SHORT_CLIFF);
 
         let status = client.get_stream_status(&stream_id);
         assert!(status.is_active);
-        assert_eq!(status.streamed, 10_000);
-        assert_eq!(status.withdrawable, 10_000);
+        assert_eq!(status.streamed, test::SMALL_AMOUNT * test::SHORT_CLIFF);
+        assert_eq!(status.withdrawable, test::SMALL_AMOUNT * test::SHORT_CLIFF);
     }
 
     #[test]
@@ -1194,7 +1194,7 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        let stream_id = client.create_stream(&sender, &token.address, &recipient, &100, &1000);
+        let stream_id = client.create_stream(&sender, &token.address, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
         let result = client.try_cancel_stream(&stream_id);
         assert!(result.is_ok());
 
@@ -1220,13 +1220,13 @@ mod tests {
         sac.mint(&sender, &10_000_000i128);
         let token = TokenClient::new(&env, &token_id);
 
-        let stream_id = client.create_stream(&sender, &token.address, &recipient, &100, &1000);
-        env.ledger().with_mut(|l| l.timestamp += 2000);
+        let stream_id = client.create_stream(&sender, &token.address, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
+        env.ledger().with_mut(|l| l.timestamp += test::LONG_DURATION);
 
         let status = client.get_stream_status(&stream_id);
         assert!(status.is_finished);
         assert!(!status.is_active);
-        assert_eq!(status.streamed, 100_000);
+        assert_eq!(status.streamed, test::SMALL_AMOUNT * test::MEDIUM_DURATION);
     }
 
     #[test]
@@ -1247,15 +1247,15 @@ mod tests {
         StellarAssetClient::new(&env, &token_id).mint(&sender, &100_000i128);
 
         // rate=100, duration=1000 → total=100_000
-        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
         // Advance past end_time without withdrawing
-        env.ledger().with_mut(|l| l.timestamp += 2000);
+        env.ledger().with_mut(|l| l.timestamp += test::LONG_DURATION);
 
         let status = client.get_stream_status(&stream_id);
         assert!(!status.is_active);
         assert!(status.is_finished);
         assert!(status.is_claimable);
-        assert_eq!(status.withdrawable, 100_000);
+        assert_eq!(status.withdrawable, test::SMALL_AMOUNT * test::MEDIUM_DURATION);
     }
 
     // ── Rounding / cancellation split tests ──────────────────────────────────
@@ -1270,20 +1270,20 @@ mod tests {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        let duration = 1_000u64;
+        let duration = test::MEDIUM_DURATION;
         let rate = 1i128;
         let total = rate * duration as i128; // 1_000
         let token = setup_token(&env, &sender, total);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
 
-        env.ledger().with_mut(|l| l.timestamp += 333);
+        env.ledger().with_mut(|l| l.timestamp += test::MEDIUM_DURATION / 3);
         let status = client.get_stream_status(&stream_id);
-        assert_eq!(status.streamed, 333);
-        assert_eq!(status.remaining, total - 333);
+        assert_eq!(status.streamed, test::MEDIUM_DURATION / 3);
+        assert_eq!(status.remaining, total - test::MEDIUM_DURATION / 3);
         assert_eq!(status.streamed + status.remaining, total);
 
-        env.ledger().with_mut(|l| l.timestamp += 667); // total += 1000
+        env.ledger().with_mut(|l| l.timestamp += 2 * test::MEDIUM_DURATION / 3); // total += 1000
         let status = client.get_stream_status(&stream_id);
         assert_eq!(status.streamed, total);
         assert_eq!(status.remaining, 0);
@@ -1300,20 +1300,20 @@ mod tests {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        let duration = 1_000u64;
+        let duration = test::MEDIUM_DURATION;
         let rate = i128::MAX / duration as i128;
         let total = rate * duration as i128;
         let token = setup_token(&env, &sender, total);
 
         let stream_id = client.create_stream(&sender, &token, &recipient, &rate, &duration);
 
-        env.ledger().with_mut(|l| l.timestamp += 500);
+        env.ledger().with_mut(|l| l.timestamp += test::MEDIUM_CLIFF);
         let status = client.get_stream_status(&stream_id);
-        assert_eq!(status.streamed, rate * 500);
-        assert_eq!(status.remaining, total - rate * 500);
+        assert_eq!(status.streamed, rate * test::MEDIUM_CLIFF);
+        assert_eq!(status.remaining, total - rate * test::MEDIUM_CLIFF);
         assert_eq!(status.streamed + status.remaining, total);
 
-        env.ledger().with_mut(|l| l.timestamp += 500);
+        env.ledger().with_mut(|l| l.timestamp += test::MEDIUM_CLIFF);
         let status = client.get_stream_status(&stream_id);
         assert_eq!(status.streamed, total);
         assert_eq!(status.remaining, 0);
@@ -1371,7 +1371,7 @@ mod tests {
         let recipient = Address::generate(&env);
 
         let rate = 7i128; // intentionally odd to surface any rounding
-        let duration = 100u64;
+        let duration = test::SHORT_DURATION;
         let total = rate * duration as i128; // 700
         let token = setup_token(&env, &sender, total);
 
@@ -1436,10 +1436,10 @@ mod tests {
             .address();
         StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
 
-        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
-        env.ledger().with_mut(|l| l.timestamp += 50);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
+        env.ledger().with_mut(|l| l.timestamp += test::SHORT_DURATION / 2);
 
-        assert_eq!(client.get_claimable(&stream_id), 5_000); // 100 * 50
+        assert_eq!(client.get_claimable(&stream_id), test::SMALL_AMOUNT * (test::SHORT_DURATION / 2)); // 100 * 50
     }
 
     #[test]
@@ -1457,10 +1457,10 @@ mod tests {
             .address();
         StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
 
-        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
-        env.ledger().with_mut(|l| l.timestamp += 2000);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
+        env.ledger().with_mut(|l| l.timestamp += test::LONG_DURATION);
 
-        assert_eq!(client.get_claimable(&stream_id), 100_000); // 100 * 1000
+        assert_eq!(client.get_claimable(&stream_id), test::SMALL_AMOUNT * test::MEDIUM_DURATION); // 100 * 1000
     }
 
     #[test]
@@ -1478,8 +1478,8 @@ mod tests {
             .address();
         StellarAssetClient::new(&env, &token_id).mint(&sender, &10_000_000i128);
 
-        let stream_id = client.create_stream(&sender, &token_id, &recipient, &100, &1000);
-        env.ledger().with_mut(|l| l.timestamp += 200);
+        let stream_id = client.create_stream(&sender, &token_id, &recipient, &test::SMALL_AMOUNT, &test::MEDIUM_DURATION);
+        env.ledger().with_mut(|l| l.timestamp += test::SHORT_DURATION * 2);
         client.cancel_stream(&stream_id);
 
         assert_eq!(client.get_claimable(&stream_id), 0);

@@ -11,7 +11,7 @@
 //! - Admins call `cancel(schedule_id)` to cancel a schedule and reclaim unvested tokens
 //! - Reduces deployment costs dramatically for multi-beneficiary vesting (e.g. employee grants)
 
-use forge_constants::error_codes;
+use forge_constants::{error_codes, test};
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -381,9 +381,9 @@ mod tests {
         let client = make_client(&env);
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
-        let token = setup_token(&env, &admin, 1_000);
+        let token = setup_token(&env, &admin, test::SMALL_AMOUNT);
 
-        let id = client.create_schedule(&token, &beneficiary, &admin, &1_000, &100, &1_000);
+        let id = client.create_schedule(&token, &beneficiary, &admin, &test::SMALL_AMOUNT, &test::SHORT_CLIFF, &test::MEDIUM_DURATION);
         assert_eq!(id, 0);
         assert_eq!(client.get_schedule_count(), 1);
     }
@@ -412,22 +412,22 @@ mod tests {
         let client = make_client(&env);
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
-        let token = setup_token(&env, &admin, 1_000);
+        let token = setup_token(&env, &admin, test::SMALL_AMOUNT);
 
-        let id = client.create_schedule(&token, &beneficiary, &admin, &1_000, &100, &1_000);
+        let id = client.create_schedule(&token, &beneficiary, &admin, &test::SMALL_AMOUNT, &test::SHORT_CLIFF, &test::MEDIUM_DURATION);
 
         // Before cliff — claim must fail
-        env.ledger().with_mut(|l| l.timestamp = 50);
+        env.ledger().with_mut(|l| l.timestamp = test::SHORT_DURATION / 2);
         let err = client.try_claim(&id).unwrap_err();
         assert_eq!(err, Ok(FactoryError::CliffNotReached));
 
         // After cliff — partial claim
-        env.ledger().with_mut(|l| l.timestamp = 500);
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_CLIFF);
         let claimed = client.claim(&id);
-        assert_eq!(claimed, 500); // 500/1000 * 1000 = 500
+        assert_eq!(claimed, test::SMALL_AMOUNT / 2); // 500/1000 * 1000 = 500
 
         let status = client.get_status(&id);
-        assert_eq!(status.claimed, 500);
+        assert_eq!(status.claimed, test::SMALL_AMOUNT / 2);
         assert_eq!(status.claimable, 0);
     }
 
@@ -439,11 +439,11 @@ mod tests {
         let client = make_client(&env);
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
-        let token = setup_token(&env, &admin, 1_000);
+        let token = setup_token(&env, &admin, test::SMALL_AMOUNT);
 
-        let id = client.create_schedule(&token, &beneficiary, &admin, &1_000, &0, &1_000);
+        let id = client.create_schedule(&token, &beneficiary, &admin, &test::SMALL_AMOUNT, &test::NO_CLIFF, &test::MEDIUM_DURATION);
 
-        env.ledger().with_mut(|l| l.timestamp = 500);
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_CLIFF);
         client.claim(&id);
 
         // Second claim at same timestamp — nothing new
@@ -508,22 +508,22 @@ mod tests {
         let admin = Address::generate(&env);
         let b1 = Address::generate(&env);
         let b2 = Address::generate(&env);
-        let token = setup_token(&env, &admin, 2_000);
+        let token = setup_token(&env, &admin, test::MEDIUM_AMOUNT);
 
-        let id1 = client.create_schedule(&token, &b1, &admin, &1_000, &0, &1_000);
-        let id2 = client.create_schedule(&token, &b2, &admin, &1_000, &0, &500);
+        let id1 = client.create_schedule(&token, &b1, &admin, &test::SMALL_AMOUNT, &test::NO_CLIFF, &test::MEDIUM_DURATION);
+        let id2 = client.create_schedule(&token, &b2, &admin, &test::SMALL_AMOUNT, &test::NO_CLIFF, &test::SHORT_DURATION);
 
-        env.ledger().with_mut(|l| l.timestamp = 500);
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_CLIFF);
 
         // id1: 500/1000 * 1000 = 500 vested
         // id2: fully vested (500 >= 500)
         let s1 = client.get_status(&id1);
         let s2 = client.get_status(&id2);
 
-        assert_eq!(s1.vested, 500);
+        assert_eq!(s1.vested, test::SMALL_AMOUNT / 2);
         assert!(!s1.fully_vested);
 
-        assert_eq!(s2.vested, 1_000);
+        assert_eq!(s2.vested, test::SMALL_AMOUNT);
         assert!(s2.fully_vested);
 
         // Claiming id2 does not affect id1
@@ -581,7 +581,7 @@ mod tests {
         // cliff > duration
         assert_eq!(
             client
-                .try_create_schedule(&token, &b, &admin, &1_000, &500, &100)
+                .try_create_schedule(&token, &b, &admin, &test::SMALL_AMOUNT, &test::MEDIUM_CLIFF, &test::SHORT_DURATION)
                 .unwrap_err(),
             Ok(FactoryError::InvalidConfig)
         );
@@ -607,33 +607,33 @@ mod tests {
         
         // Fund admin_b separately
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&admin_a, &admin_b, &1_000);
+        token_client.transfer(&admin_a, &admin_b, &test::SMALL_AMOUNT);
 
         // Create schedule_a: 1000 tokens, 1000 second duration
-        let schedule_a = client.create_schedule(&token, &beneficiary, &admin_a, &1_000, &0, &1_000);
+        let schedule_a = client.create_schedule(&token, &beneficiary, &admin_a, &test::SMALL_AMOUNT, &test::NO_CLIFF, &test::MEDIUM_DURATION);
         
         // Create schedule_b: 500 tokens, 1000 second duration  
-        let schedule_b = client.create_schedule(&token, &beneficiary, &admin_b, &500, &0, &1_000);
+        let schedule_b = client.create_schedule(&token, &beneficiary, &admin_b, &test::SMALL_AMOUNT / 2, &test::NO_CLIFF, &test::MEDIUM_DURATION);
 
         // Verify schedule count is 2
         assert_eq!(client.get_schedule_count(), 2);
 
         // Advance time to 50% (500 seconds)
-        env.ledger().with_mut(|l| l.timestamp = 500);
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_CLIFF);
 
         // Claim from schedule_a only
         let claimed_amount = client.claim(&schedule_a);
-        assert_eq!(claimed_amount, 500); // 50% of 1000 = 500
+        assert_eq!(claimed_amount, test::SMALL_AMOUNT / 2); // 50% of 1000 = 500
 
         // Verify schedule_a status reflects the claim
         let status_a = client.get_status(&schedule_a);
-        assert_eq!(status_a.claimed, 500);
+        assert_eq!(status_a.claimed, test::SMALL_AMOUNT / 2);
         assert_eq!(status_a.claimable, 0);
 
         // Verify schedule_b is unaffected (still 0 claimed)
         let status_b = client.get_status(&schedule_b);
         assert_eq!(status_b.claimed, 0);
-        assert_eq!(status_b.claimable, 250); // 50% of 500 = 250
+        assert_eq!(status_b.claimable, test::SMALL_AMOUNT / 4); // 50% of 500 = 250
 
         // Cancel schedule_b
         client.cancel(&schedule_b);
@@ -645,18 +645,18 @@ mod tests {
         // Verify schedule_a is still active and claimable
         let status_a_after_cancel = client.get_status(&schedule_a);
         assert!(!status_a_after_cancel.cancelled);
-        assert_eq!(status_a_after_cancel.claimed, 500); // Still has previous claim
+        assert_eq!(status_a_after_cancel.claimed, test::SMALL_AMOUNT / 2); // Still has previous claim
         
         // Advance to full vesting for schedule_a
-        env.ledger().with_mut(|l| l.timestamp = 1_000);
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_DURATION);
         
         // Should be able to claim remaining amount from schedule_a
         let final_claim = client.claim(&schedule_a);
-        assert_eq!(final_claim, 500); // Remaining 50% = 500
+        assert_eq!(final_claim, test::SMALL_AMOUNT / 2); // Remaining 50% = 500
         
         // Verify schedule_a is fully claimed
         let status_a_final = client.get_status(&schedule_a);
-        assert_eq!(status_a_final.claimed, 1_000); // Total claimed = 1_000
+        assert_eq!(status_a_final.claimed, test::SMALL_AMOUNT); // Total claimed = 1_000
         assert!(status_a_final.fully_vested);
 
         // Schedule count should remain 2 throughout

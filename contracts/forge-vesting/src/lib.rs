@@ -10,7 +10,7 @@
 //! - Beneficiary can call `claim()` at any time to withdraw unlocked tokens
 //! - Admin can cancel vesting and reclaim unvested tokens
 
-use forge_constants::error_codes;
+use forge_constants::{error_codes, test};
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -1461,9 +1461,9 @@ mod tests {
     /// - A subsequent `claim()` fails with `NothingToClaim` — no tokens remain.
     #[test]
     fn test_fully_vested_claim_remaining_tokens() {
-        const TOTAL: i128 = 10_000;
-        const CLIFF: u64 = 0;
-        const DURATION: u64 = 31_536_000; // 365 days
+        const TOTAL: i128 = test::MEDIUM_AMOUNT;
+        const CLIFF: u64 = test::NO_CLIFF;
+        const DURATION: u64 = test::LONG_DURATION;
 
         let env = Env::default();
         env.mock_all_auths();
@@ -1834,8 +1834,8 @@ mod tests {
     /// get_status().claimed equals total_amount after all claims.
     #[test]
     fn test_sequential_claims_accumulate_correctly() {
-        const TOTAL: i128 = 1_000_000;
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::LARGE_AMOUNT;
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -1913,9 +1913,9 @@ mod tests {
     /// total_amount. Uses a cliff at 25% of duration to also verify cliff boundary.
     #[test]
     fn test_claim_correct_amount_at_multiple_time_points() {
-        const TOTAL: i128 = 1_000_000;
-        const CLIFF: u64 = 250; // 25% of duration
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::LARGE_AMOUNT;
+        const CLIFF: u64 = test::MEDIUM_CLIFF; // 25% of duration
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -2204,9 +2204,9 @@ mod tests {
     /// Uses total=10_000, cliff=100, duration=1000 → expected 1_000.
     #[test]
     fn test_claimable_at_exactly_cliff_is_correct() {
-        const TOTAL: i128 = 10_000;
-        const CLIFF: u64 = 100;
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::MEDIUM_AMOUNT;
+        const CLIFF: u64 = test::SHORT_CLIFF;
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -2224,9 +2224,9 @@ mod tests {
     /// Uses total=10_000, cliff=100, duration=1000 → expected 1_010.
     #[test]
     fn test_claimable_at_cliff_plus_one_is_correct() {
-        const TOTAL: i128 = 10_000;
-        const CLIFF: u64 = 100;
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::MEDIUM_AMOUNT;
+        const CLIFF: u64 = test::SHORT_CLIFF;
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -2244,9 +2244,9 @@ mod tests {
     /// Uses total=10_000, cliff=100, duration=1000 → expected 9_990 (truncated).
     #[test]
     fn test_claimable_at_duration_minus_one_is_correct() {
-        const TOTAL: i128 = 10_000;
-        const CLIFF: u64 = 100;
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::MEDIUM_AMOUNT;
+        const CLIFF: u64 = test::SHORT_CLIFF;
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -2264,9 +2264,9 @@ mod tests {
     /// Uses total=10_000, cliff=100, duration=1000 → expected 10_000.
     #[test]
     fn test_claimable_at_full_duration_is_total_amount() {
-        const TOTAL: i128 = 10_000;
-        const CLIFF: u64 = 100;
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::MEDIUM_AMOUNT;
+        const CLIFF: u64 = test::SHORT_CLIFF;
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -2284,9 +2284,9 @@ mod tests {
     /// recovering the truncated remainder with no tokens lost.
     #[test]
     fn test_sequential_claim_duration_minus_one_then_duration_sums_to_total() {
-        const TOTAL: i128 = 10_000;
-        const CLIFF: u64 = 100;
-        const DURATION: u64 = 1000;
+        const TOTAL: i128 = test::MEDIUM_AMOUNT;
+        const CLIFF: u64 = test::SHORT_CLIFF;
+        const DURATION: u64 = test::MEDIUM_DURATION;
 
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
