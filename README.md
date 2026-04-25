@@ -387,7 +387,24 @@ If you want to deploy contracts to Stellar testnet, generate and fund a test ide
 stellar keys generate <your-identity-name> --network testnet --fund
 ```
 
-Replace `<your-identity-name>` with any label you like (e.g. `alice`). The `--fund` flag automatically requests test tokens from the Stellar Friendbot.
+Replace `<your-identity-name>` with any label you like (e.g., `alice`). The `--fund` flag automatically requests test tokens from the Stellar Friendbot.
+
+---
+
+## ⚙️ Optional: Environment Configuration
+
+For convenience, you can store commonly used values in a `.env` file.
+
+1. Copy the example:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Fill in values like network, identity, or contract IDs.
+
+> Note: The project does not require `.env` to run. This is only for developer convenience when working with repeated CLI commands.
+
 
 ---
 

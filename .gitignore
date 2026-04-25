@@ -28,6 +28,7 @@ benches/src/scrap-menu/
 .project
 .settings/
 .classpath
+*.code-workspace
 
 # Environment and secrets
 .env
@@ -35,18 +36,45 @@ benches/src/scrap-menu/
 .env.*.local
 *.key
 *.pem
+secrets/
+*.secret
 
 # OS generated files
 Thumbs.db
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
 # Documentation build
 book/
 target/doc/
+docs/_build/
+*.pdf
 
 # Profiling and debugging
 flamegraph.svg
 perf.data
 perf.data.old
+*.profraw
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# Node modules (if any JS tooling is added)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Coverage reports
+coverage/
+*.lcov
+tarpaulin-report.html

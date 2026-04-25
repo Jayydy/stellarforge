@@ -1,7 +1,6 @@
 #![no_std]
 
 //! # forge-oracle
-//!
 //! Standardized price feed interface for Stellar/Soroban contracts.
 //!
 //! ## Features
@@ -12,9 +11,7 @@
 
 use forge_constants::error_codes;
 use forge_errors::CommonError;
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
@@ -41,7 +38,7 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriceData {
-    /// Price scaled to 7 decimal places (e.g. 1_0000000 = 1.0)
+    /// Price scaled to 7 decimal places (e.g., 1_0000000 = 1.0)
     pub price: i128,
     /// Ledger timestamp of last update
     pub updated_at: u64,
@@ -193,7 +190,9 @@ impl ForgeOracle {
                 quote: quote.clone(),
             });
             env.storage().persistent().set(&DataKey::Pairs, &pairs);
-            env.storage().persistent().extend_ttl(&DataKey::Pairs, 17280, 34560);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Pairs, 17280, 34560);
         }
 
         env.storage()
@@ -291,7 +290,7 @@ impl ForgeOracle {
     ///
     /// - `env`: The Soroban environment.
     /// - `new_threshold`: The new maximum age of a price in seconds. A price is
-    ///   considered stale when `now >= updated_at + threshold`, i.e. the threshold
+    ///   considered stale when `now >= updated_at + threshold`, i.e., the threshold
     ///   is exclusive: a price is valid while `now < updated_at + threshold` and
     ///   stale at exactly `now == updated_at + threshold`.
     ///
@@ -350,7 +349,7 @@ impl ForgeOracle {
     /// for the same pair. A value of `0` disables the circuit breaker (default).
     ///
     /// # Parameters
-    /// - `bps`: Maximum deviation in basis points (e.g. `1000` = 10%). `0` disables the check.
+    /// - `bps`: Maximum deviation in basis points (e.g., `1000` = 10%). `0` disables the check.
     ///
     /// # Errors
     /// - [`OracleError::NotInitialized`] — contract not initialized

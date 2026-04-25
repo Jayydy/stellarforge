@@ -4,11 +4,25 @@ Thank you for your interest in contributing to StellarForge! This document provi
 
 ## 🚀 Quick Start
 
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
-3. **Make your changes**
-4. **Run tests**: `make test` or `cargo test --workspace`
-5. **Submit a pull request**
+1. **Fork the repository** on GitHub
+2. **Clone your fork**: `git clone https://github.com/YOUR-USERNAME/stellarforge.git`
+3. **Create a feature branch**: `git checkout -b feature/your-feature-name`
+4. **Make your changes**
+5. **Run tests**: `make test` or `cargo test --workspace`
+6. **Commit your changes**: `git commit -m "Description of changes"`
+7. **Push to your fork**: `git push origin feature/your-feature-name`
+8. **Submit a pull request** from your fork to the main repository
+
+## 🌿 Branch Naming Convention
+
+Use descriptive branch names that follow this pattern:
+
+- `feat/description` - New features (e.g., `feat/add-pause-functionality`)
+- `fix/description` - Bug fixes (e.g., `fix/vesting-calculation-bug`)
+- `docs/description` - Documentation updates (e.g., `docs/update-readme`)
+- `refactor/description` - Code refactoring (e.g., `refactor/simplify-error-handling`)
+- `test/description` - Test additions or updates (e.g., `test/add-multisig-tests`)
+- `chore/description` - Maintenance tasks (e.g., `chore/update-dependencies`)
 
 ## 📦 Shared Error Crate (forge-errors)
 
@@ -137,18 +151,20 @@ We welcome feature requests! Please:
 ### Before Submitting
 
 - [ ] Tests pass: `make test`
-- [ ] Code formatted: `make fmt`
-- [ ] Linting clean: `make lint`
+- [ ] Code formatted: `make fmt` or `cargo fmt --all`
+- [ ] Linting clean: `make lint` or `cargo clippy --workspace -- -D warnings`
 - [ ] Documentation updated
-- [ ] CHANGELOG.md updated
+- [ ] CHANGELOG.md updated (if applicable)
+- [ ] Branch follows naming convention (feat/, fix/, docs/, etc.)
 
 ### PR Guidelines
 
-- **Small, focused PRs** are preferred
+- **Small, focused PRs** are preferred over large, multi-purpose changes
 - **One feature per PR** when possible
 - **Include tests** for new functionality
 - **Update documentation** as needed
-- **Link to related issues**
+- **Link to related issues** using "Closes #123" or "Fixes #456" in the PR description
+- **Provide context** in the PR description explaining what changed and why
 
 ### Review Process
 

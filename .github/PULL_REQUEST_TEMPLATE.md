@@ -1,6 +1,8 @@
 ## Summary
 [Provide a clear and concise summary of the changes made in this PR]
 
+## Related issue
+[Link to the issue, e.g., #123]
 ## Related Issue
 [Link to the issue this PR addresses, e.g. Closes #123]
 
