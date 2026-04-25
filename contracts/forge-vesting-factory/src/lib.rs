@@ -331,6 +331,11 @@ impl ForgeVestingFactory {
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
+    /// Compute the amount vested for a schedule at `now`.
+    ///
+    /// Returns `0` before the cliff or when the schedule has been cancelled,
+    /// returns the full amount once duration is reached, and otherwise performs
+    /// linear vesting based on elapsed time.
     fn compute_vested(config: &ScheduleConfig, now: u64) -> i128 {
         if config.cancelled {
             return 0;
@@ -359,6 +364,7 @@ mod tests {
         Address, Env,
     };
 
+    /// Create a test token and mint `amount` to `admin`.
     fn setup_token(env: &Env, admin: &Address, amount: i128) -> Address {
         let token_admin = Address::generate(env);
         let token = env
@@ -368,6 +374,7 @@ mod tests {
         token
     }
 
+    /// Register and return a client for a fresh vesting factory contract.
     fn make_client(env: &Env) -> ForgeVestingFactoryClient {
         let id = env.register_contract(None, ForgeVestingFactory);
         ForgeVestingFactoryClient::new(env, &id)
