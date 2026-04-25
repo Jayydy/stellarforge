@@ -1,0 +1,18 @@
+# forge-constants - Shared constants used across StellarForge contracts
+#
+# This crate provides centralized constants to avoid magic numbers
+# and ensure consistency across the entire StellarForge ecosystem.
+
+[package]
+name = "forge-constants"
+version = "0.1.0"
+edition = "2021"
+description = "Shared constants for StellarForge contracts"
+license = "MIT"
+repository = "https://github.com/Austinaminu2/stellarforge"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

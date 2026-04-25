@@ -1,3 +1,11 @@
+# forge-vesting - Token vesting contract with configurable cliff and linear release schedule
+#
+# Features:
+# - Deploy with a token, beneficiary, total amount, cliff period, and vesting duration
+# - After the cliff, tokens unlock linearly every second
+# - Beneficiary can call claim() at any time to withdraw unlocked tokens
+# - Admin can cancel vesting and reclaim unvested tokens
+
 [package]
 name = "forge-vesting"
 version = "0.1.0"
@@ -9,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "../../crates/forge-errors" }
+forge-constants = { path = "../../crates/forge-constants" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

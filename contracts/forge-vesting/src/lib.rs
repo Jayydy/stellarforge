@@ -10,6 +10,7 @@
 //! - Beneficiary can call `claim()` at any time to withdraw unlocked tokens
 //! - Admin can cancel vesting and reclaim unvested tokens
 
+use forge_constants::error_codes;
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -91,15 +92,15 @@ pub struct VestingSchedule {
 pub enum VestingError {
     #[from(CommonError)]
     Common(CommonError),
-    CliffNotReached = 4,
-    NothingToClaim = 5,
-    Cancelled = 6,
-    SameAdmin = 8,
-    SameBeneficiary = 11,
-    BeneficiaryAsAdmin = 12,
-    Paused = 9,
-    NotPaused = 10,
-    VestingComplete = 13,
+    CliffNotReached = error_codes::vesting::CLIFF_NOT_REACHED,
+    NothingToClaim = error_codes::vesting::NOTHING_TO_CLAIM,
+    Cancelled = error_codes::vesting::CANCELLED,
+    SameAdmin = error_codes::vesting::SAME_ADMIN,
+    SameBeneficiary = error_codes::vesting::SAME_BENEFICIARY,
+    BeneficiaryAsAdmin = error_codes::vesting::BENEFICIARY_AS_ADMIN,
+    Paused = error_codes::vesting::PAUSED,
+    NotPaused = error_codes::vesting::NOT_PAUSED,
+    VestingComplete = error_codes::vesting::VESTING_COMPLETE,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────

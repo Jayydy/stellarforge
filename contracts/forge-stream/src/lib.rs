@@ -10,6 +10,7 @@
 //! - Sender can cancel and reclaim unstreamed tokens
 //! - Multiple streams can run in parallel (keyed by stream_id)
 
+use forge_constants::error_codes;
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -94,10 +95,10 @@ pub struct StreamStatus {
 pub enum StreamError {
     #[from(CommonError)]
     Common(CommonError),
-    StreamNotFound = 2,
-    Unauthorized = 2,
-    NothingToWithdraw = 3,
-    AlreadyCancelled = 4,
+    StreamNotFound = error_codes::stream::STREAM_NOT_FOUND,
+    Unauthorized = error_codes::stream::UNAUTHORIZED,
+    NothingToWithdraw = error_codes::stream::NOTHING_TO_WITHDRAW,
+    AlreadyCancelled = error_codes::stream::ALREADY_CANCELLED,
     InvalidConfig = 5,
     StreamFinished = 6,
     /// Sender's token balance is less than the total required to fund the stream

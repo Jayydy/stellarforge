@@ -10,6 +10,7 @@
 //! - Timelock between approval and execution
 //! - Anyone can propose; execution is permissionless once passed
 
+use forge_constants::{error_codes, ttl};
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
@@ -34,10 +35,7 @@ use soroban_sdk::{
 //   Applied to DataKey::Vote entries.  A vote record must outlive the proposal
 //   it belongs to so that has_voted() remains reliable throughout the entire
 //   lifecycle.  Same 60-day ceiling as proposals.
-const INSTANCE_TTL_THRESHOLD: u32 = 17_280;
-const INSTANCE_TTL_EXTEND: u32 = 34_560;
-const PROPOSAL_TTL_EXTEND: u32 = 1_036_800; // ~60 days
-const VOTE_TTL_EXTEND: u32 = 1_036_800; // ~60 days
+// TTL constants are now imported from forge-constants::ttl
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -142,20 +140,19 @@ pub struct Proposal {
 pub enum GovernorError {
     #[from(CommonError)]
     Common(CommonError),
-    ProposalNotFound = 4,
-    VotingClosed = 5,
-    VotingStillOpen = 6,
-    AlreadyVoted = 7,
-    QuorumNotReached = 8,
-    ProposalNotPassed = 9,
-    TimelockNotElapsed = 10,
-    AlreadyExecuted = 11,
-    AlreadyCancelled = 12,
-    InvalidWeight = 13,
-    AlreadyFinalized = 14,
-    Unauthorized = 14,
-    AlreadyFinalized = 15,
-    VoteNotFound = 16,
+    ProposalNotFound = error_codes::governor::PROPOSAL_NOT_FOUND,
+    VotingClosed = error_codes::governor::VOTING_CLOSED,
+    VotingStillOpen = error_codes::governor::VOTING_STILL_OPEN,
+    AlreadyVoted = error_codes::governor::ALREADY_VOTED,
+    QuorumNotReached = error_codes::governor::QUORUM_NOT_REACHED,
+    ProposalNotPassed = error_codes::governor::PROPOSAL_NOT_PASSED,
+    TimelockNotElapsed = error_codes::governor::TIMELOCK_NOT_ELAPSED,
+    AlreadyExecuted = error_codes::governor::ALREADY_EXECUTED,
+    AlreadyCancelled = error_codes::governor::ALREADY_CANCELLED,
+    InvalidWeight = error_codes::governor::INVALID_WEIGHT,
+    AlreadyFinalized = error_codes::governor::ALREADY_FINALIZED,
+    Unauthorized = error_codes::governor::UNAUTHORIZED,
+    VoteNotFound = error_codes::governor::VOTE_NOT_FOUND,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -221,7 +218,7 @@ impl GovernorContract {
         env.storage().instance().set(&DataKey::Config, &config);
         env.storage()
             .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            .extend_ttl(ttl::INSTANCE_TTL_THRESHOLD, ttl::INSTANCE_TTL_EXTEND);
         Ok(())
     }
 
@@ -286,15 +283,15 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().persistent().extend_ttl(
             &DataKey::Proposal(proposal_id),
-            PROPOSAL_TTL_EXTEND,
-            PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
         );
         env.storage()
             .persistent()
             .set(&DataKey::NextProposalId, &(proposal_id + 1));
         env.storage()
             .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            .extend_ttl(ttl::INSTANCE_TTL_THRESHOLD, ttl::INSTANCE_TTL_EXTEND);
 
         // Track active proposal ID for O(1) get_pending_proposals
         let mut active: Vec<u64> = env
@@ -413,18 +410,18 @@ impl GovernorContract {
         env.storage().persistent().set(&vote_key, &weight);
         env.storage()
             .persistent()
-            .extend_ttl(&vote_key, VOTE_TTL_EXTEND, VOTE_TTL_EXTEND);
+            .extend_ttl(&vote_key, ttl::VOTE_TTL_EXTEND, ttl::VOTE_TTL_EXTEND);
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().persistent().extend_ttl(
             &DataKey::Proposal(proposal_id),
-            PROPOSAL_TTL_EXTEND,
-            PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
         );
         env.storage()
             .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            .extend_ttl(ttl::INSTANCE_TTL_THRESHOLD, ttl::INSTANCE_TTL_EXTEND);
 
         env.events().publish(
             (Symbol::new(&env, "vote_cast"),),
@@ -504,12 +501,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().persistent().extend_ttl(
             &DataKey::Proposal(proposal_id),
-            PROPOSAL_TTL_EXTEND,
-            PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
         );
         env.storage()
             .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            .extend_ttl(ttl::INSTANCE_TTL_THRESHOLD, ttl::INSTANCE_TTL_EXTEND);
 
         Self::remove_active_proposal(&env, proposal_id);
 
@@ -582,12 +579,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         env.storage().persistent().extend_ttl(
             &DataKey::Proposal(proposal_id),
-            PROPOSAL_TTL_EXTEND,
-            PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
+            ttl::PROPOSAL_TTL_EXTEND,
         );
         env.storage()
             .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            .extend_ttl(ttl::INSTANCE_TTL_THRESHOLD, ttl::INSTANCE_TTL_EXTEND);
 
         // Remove from active proposals list (in case finalize was skipped)
         Self::remove_active_proposal(&env, proposal_id);

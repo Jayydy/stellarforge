@@ -1,3 +1,11 @@
+# forge-multisig - N-of-M multisig treasury contract for Stellar/Soroban
+#
+# Features:
+# - N-of-M signature threshold for transaction approval
+# - Timelock delay before execution after approval
+# - Owners can propose, approve, reject, and execute transactions
+# - Native token support via Stellar token interface
+
 [package]
 name = "forge-multisig"
 version = "0.1.0"
@@ -9,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { version = "21.7.6" }
 forge-errors = { path = "../../crates/forge-errors" }
+forge-constants = { path = "../../crates/forge-constants" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.7.6", features = ["testutils"] }

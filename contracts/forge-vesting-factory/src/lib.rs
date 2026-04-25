@@ -11,6 +11,7 @@
 //! - Admins call `cancel(schedule_id)` to cancel a schedule and reclaim unvested tokens
 //! - Reduces deployment costs dramatically for multi-beneficiary vesting (e.g. employee grants)
 
+use forge_constants::error_codes;
 use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
@@ -64,11 +65,11 @@ pub struct VestingStatus {
 pub enum FactoryError {
     #[from(CommonError)]
     Common(CommonError),
-    ScheduleNotFound = 1,
-    CliffNotReached = 3,
-    NothingToClaim = 4,
-    Cancelled = 5,
-    InvalidConfig = 6,
+    ScheduleNotFound = error_codes::factory::SCHEDULE_NOT_FOUND,
+    CliffNotReached = error_codes::factory::CLIFF_NOT_REACHED,
+    NothingToClaim = error_codes::factory::NOTHING_TO_CLAIM,
+    Cancelled = error_codes::factory::CANCELLED,
+    InvalidConfig = error_codes::factory::INVALID_CONFIG,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────

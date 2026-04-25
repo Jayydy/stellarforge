@@ -1,3 +1,9 @@
+# forge-errors - Common error types shared across StellarForge contracts
+#
+# This crate provides standardized error variants that are used across multiple
+# contracts in the StellarForge suite, reducing duplication and enabling
+# integrators to handle common error scenarios with shared logic.
+
 [package]
 name = "forge-errors"
 version = "0.1.0"
@@ -5,6 +11,7 @@ edition = "2021"
 description = "Common error types for StellarForge contracts"
 authors = ["StellarForge Contributors"]
 license = "MIT"
+repository = "https://github.com/Austinaminu2/stellarforge"
 
 [dependencies]
 soroban-sdk = { version = "21.7.6" }

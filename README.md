@@ -590,6 +590,33 @@ Replace `forge_governor` with the snake_case name of the contract you want to op
 
 ---
 
+## 🤝 FAQ
+
+### Frequently Asked Questions
+
+**Q: How do I get started contributing to StellarForge?**
+A: Start by reading the [CONTRIBUTING.md](CONTRIBUTING.md) guide, then look for issues labeled `good first issue`. Set up your development environment by installing Rust, the WASM target, and Stellar CLI as described in the [Prerequisites & Setup](#️-prerequisites--setup) section.
+
+**Q: What programming language and framework does StellarForge use?**
+A: StellarForge contracts are written in Rust using the Soroban SDK, which is Stellar's smart contract platform. All contracts compile to WebAssembly (WASM) for deployment on the Stellar network.
+
+**Q: How can I test my changes before submitting a pull request?**
+A: Run `make test` to execute all tests across the workspace, or `cargo test -p <contract-name>` to test a specific contract. Use `make check` to run formatting, linting, and tests in sequence. For deployment testing, use the Stellar testnet as described in the [Testnet Deployment](#-testnet-deployment) section.
+
+**Q: What are the audit status and security considerations for these contracts?**
+A: As of this release, StellarForge contracts are **unaudited**. While they include comprehensive test coverage and follow security best practices, they have not undergone independent security review. See the [Audit Status](#-audit-status) section for detailed information and production use guidelines.
+
+**Q: How do I choose the right contract for my use case?**
+A: Use the [Contract Comparison](#-contract-comparison) table to quickly identify which primitive fits your needs. For complex use cases, check the [Composability Guide](#-composability-guide) and [Real World Use Cases](#-real-world-use-cases) sections for examples of how contracts can be combined.
+
+**Q: Can I deploy these contracts to mainnet?**
+A: While technically possible, **mainnet deployment is not recommended** until the contracts have been formally audited. Use testnet for development and testing. See the audit disclaimer in the [Audit Status](#-audit-status) section for important security considerations.
+
+**Q: How do I report security vulnerabilities or bugs?**
+A: For security vulnerabilities, please follow responsible disclosure practices by contacting the maintainers privately. For general bugs, open an issue on [GitHub Issues](https://github.com/Austinaminu2/stellarforge/issues) with a minimal reproduction case.
+
+---
+
 ## License
 
 MIT
