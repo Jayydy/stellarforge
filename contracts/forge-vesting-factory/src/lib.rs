@@ -9,7 +9,7 @@
 //! - Each schedule has its own token, beneficiary, admin, cliff, and duration
 //! - Beneficiaries call `claim(schedule_id)` to withdraw unlocked tokens
 //! - Admins call `cancel(schedule_id)` to cancel a schedule and reclaim unvested tokens
-//! - Reduces deployment costs dramatically for multi-beneficiary vesting (e.g. employee grants)
+//! - Reduces deployment costs dramatically for multi-beneficiary vesting (e.g., employee grants)
 
 use forge_errors::CommonError;
 use soroban_sdk::{

@@ -19,6 +19,6 @@ Steps to reproduce the behavior:
 A clear and concise description of what you expected to happen.
 
 ## Environment Info
-- OS: [e.g. Windows 11]
-- Version: [e.g. 1.0.0]
-- Browser/Tool: [e.g. Chrome, VS Code]
+- OS: [e.g., Windows 11]
+- Version: [e.g., 1.0.0]
+- Browser/Tool: [e.g., Chrome, VS Code]

@@ -784,7 +784,7 @@ impl MultisigContract {
     ///
     /// Read-only; does not modify state. Returns `Err(MultisigError::ProposalNotFound)`
     /// if no proposal exists with the given ID, consistent with the error-returning
-    /// convention used across all Forge contracts (e.g. `forge-governor`).
+    /// convention used across all Forge contracts (e.g., `forge-governor`).
     ///
     /// # Parameters
     /// - `proposal_id` — The ID returned by [`propose`](Self::propose).
@@ -840,7 +840,7 @@ impl MultisigContract {
     ///
     /// # Example
     /// ```text
-    /// let threshold = client.get_threshold(); // e.g. 2 for a 2-of-3 setup
+    /// let threshold = client.get_threshold(); // e.g., 2 for a 2-of-3 setup
     /// ```
     pub fn get_threshold(env: Env) -> u32 {
         env.storage()
@@ -2615,7 +2615,7 @@ mod tests {
         assert_eq!(xlm_client.balance(&recipient), 50_000_000);
     }
 
-    /// If execute() traps before the transfer completes (e.g. InsufficientFunds),
+    /// If execute() traps before the transfer completes (e.g., InsufficientFunds),
     /// proposal.executed must remain false so the proposal can be retried once
     /// the treasury is funded. This guards against the pre-transfer executed=true
     /// bug that would permanently lock funds.

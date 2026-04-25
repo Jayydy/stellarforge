@@ -212,7 +212,7 @@ impl GovernorContract {
             return Err(GovernorError::Common(CommonError::InvalidConfig));
         }
         // Sanity-check: vote_token must not be the same address as admin.
-        // A misconfigured vote_token (e.g. admin address used by mistake) would pass
+        // A misconfigured vote_token (e.g., admin address used by mistake) would pass
         // initialization silently but fail at vote() time. This catches the most obvious
         // misconfiguration early with a descriptive error.
         if config.vote_token == config.admin {
@@ -228,8 +228,8 @@ impl GovernorContract {
     /// Create a new governance proposal.
     ///
     /// Opens a new proposal for voting immediately, with `vote_end` set to
-    /// `current_timestamp + voting_period`. The proposer's approval is not
-    /// automatically recorded — owners must call [`vote`](Self::vote) separately.
+    /// `current_timestamp + voting_period`. The proposer's vote is not
+    /// automatically recorded — voters must call [`vote`](Self::vote) separately.
     /// Requires authorization from `proposer`.
     ///
     /// # Parameters

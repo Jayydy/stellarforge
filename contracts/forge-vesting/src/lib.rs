@@ -2172,7 +2172,7 @@ mod tests {
     }
 
     /// Verifies that no "admin_transferred" event is emitted when transfer_admin() fails
-    /// (e.g. SameAdmin case).
+    /// (e.g., SameAdmin case).
     #[test]
     fn test_event_admin_transferred_not_emitted_on_failure() {
         use soroban_sdk::{testutils::Events, Symbol, TryFromVal};

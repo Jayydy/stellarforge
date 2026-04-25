@@ -2,7 +2,7 @@
 [Provide a summary of the changes]
 
 ## Related issue
-[Link to the issue, e.g. #123]
+[Link to the issue, e.g., #123]
 
 ## Testing done
 [Describe the tests you ran to verify your changes]

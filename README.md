@@ -301,7 +301,7 @@ If you want to deploy contracts to Stellar testnet, generate and fund a test ide
 stellar keys generate <your-identity-name> --network testnet --fund
 ```
 
-Replace `<your-identity-name>` with any label you like (e.g. `alice`). The `--fund` flag automatically requests test tokens from the Stellar Friendbot.
+Replace `<your-identity-name>` with any label you like (e.g., `alice`). The `--fund` flag automatically requests test tokens from the Stellar Friendbot.
 
 ---
 
