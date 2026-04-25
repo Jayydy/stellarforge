@@ -47,6 +47,34 @@ Soroban charges fees based on:
 - No vote delegation
 - **Front-running protection:** The `initialize()` function requires authorization from the `admin` address specified in the `GovernorConfig`. This prevents an attacker from monitoring the mempool and front-running the deployer's initialization with a malicious configuration (e.g., quorum = 1, timelock = 0). The admin address must authorize the initialization call via `require_auth()`.
 
+## Pending Proposal Performance
+
+- `propose()` appends the new ID to `ActiveProposals` and records its slot in `ActiveProposalIndex`, so activation remains O(1).
+- `cancel_proposal()`, `finalize()`, and the `execute()` cleanup path remove active IDs with swap-remove plus the index map, so removal remains O(1) even when many proposals are active.
+- `get_pending_proposals()` reads only the current `ActiveProposals` vector and filters out expired or cancelled entries, so enumeration cost is O(n_active), not O(total_proposals_created).
+- `get_pending_proposals()` does not guarantee sorted output; callers should treat the returned IDs as an unordered active set.
+
+---
+
+## TTL Strategy
+
+Stellar persistent storage entries expire when their TTL (time-to-live) reaches zero. Without explicit TTL management, expired entries silently return `false` from `has()`, which would break double-vote protection — an expired `Vote` entry would allow a voter to cast a second vote on the same proposal.
+
+### Constants
+
+| Constant | Ledgers | Approx. time | Applied to |
+| :--- | :---: | :---: | :--- |
+| `INSTANCE_TTL_THRESHOLD` | 17 280 | ~1 day | Contract instance (bump trigger) |
+| `INSTANCE_TTL_EXTEND` | 34 560 | ~2 days | Contract instance (bump target) |
+| `PROPOSAL_TTL_EXTEND` | 1 036 800 | ~60 days | `DataKey::Proposal` entries |
+| `VOTE_TTL_EXTEND` | 1 036 800 | ~60 days | `DataKey::Vote` entries |
+
+### Rationale
+
+- `DataKey::Proposal` entries are extended on every write (`propose`, `vote`, `finalize`, `execute`) to ensure the proposal remains readable throughout its full lifecycle.
+- `DataKey::Vote` entries are extended immediately after being written in `vote()`. The 60-day ceiling covers any realistic `voting_period + timelock_delay` configuration with a large safety buffer.
+- The contract instance TTL is bumped on every mutating call using a threshold/extend pattern so it is only extended when it is actually close to expiry, avoiding unnecessary ledger writes.
+
 ---
 
 ## Tie-Breaking Behaviour

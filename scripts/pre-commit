@@ -16,13 +16,15 @@ if ! cargo clippy --all-targets -- -D warnings; then
     exit 1
 fi
 
-# Run tests (optional - can be slow for large projects)
-# Uncomment the following lines if you want to run tests before each commit:
-# echo "Running tests..."
-# if ! cargo test --workspace; then
-#     echo "❌ Tests failed. Fix them before committing."
-#     exit 1
-# fi
+# Run tests (controlled by FORGE_PRECOMMIT_TESTS env var)
+# Set FORGE_PRECOMMIT_TESTS=1 to enable: FORGE_PRECOMMIT_TESTS=1 git commit
+if [ "${FORGE_PRECOMMIT_TESTS:-0}" = "1" ]; then
+    echo "Running tests (FORGE_PRECOMMIT_TESTS=1)..."
+    if ! cargo test --workspace; then
+        echo "❌ Tests failed. Fix them before committing."
+        exit 1
+    fi
+fi
 
 echo "✅ All pre-commit checks passed!"
 exit 0

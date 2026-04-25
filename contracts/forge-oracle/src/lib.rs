@@ -1,7 +1,6 @@
 #![no_std]
 
 //! # forge-oracle
-//!
 //! Standardized price feed interface for Stellar/Soroban contracts.
 //!
 //! ## Features
@@ -10,7 +9,8 @@
 //! - Configurable staleness threshold — reads revert if price is too old
 //! - Event emission on every price update
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, vec, Address, Env, Symbol, Vec};
+use forge_errors::CommonError;
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriceData {
-    /// Price scaled to 7 decimal places (e.g. 1_0000000 = 1.0)
+    /// Price scaled to 7 decimal places (e.g., 1_0000000 = 1.0)
     pub price: i128,
     /// Ledger timestamp of last update
     pub updated_at: u64,
@@ -164,23 +164,34 @@ impl ForgeOracle {
                 .persistent()
                 .get::<DataKey, i128>(&DataKey::Price(pair.clone()))
             {
-                let deviation = (price - prev_price).abs() * 10_000 / prev_price;
-                if deviation > max_deviation_bps as i128 {
-                    return Err(OracleError::PriceDeviationTooHigh);
+                if prev_price > 0 {
+                    let deviation = (price - prev_price).abs() * 10_000 / prev_price;
+                    if deviation > max_deviation_bps as i128 {
+                        return Err(OracleError::PriceDeviationTooHigh);
+                    }
                 }
             }
         }
 
         // Track this pair in the known-pairs list (deduplicated by key)
-        let pair_key = PricePair { base: base.clone(), quote: quote.clone() };
+        let pair_key = PricePair {
+            base: base.clone(),
+            quote: quote.clone(),
+        };
         if !env.storage().persistent().has(&DataKey::Price(pair_key)) {
             let mut pairs: Vec<PricePair> = env
                 .storage()
-                .instance()
+                .persistent()
                 .get(&DataKey::Pairs)
                 .unwrap_or_else(|| vec![&env]);
-            pairs.push_back(PricePair { base: base.clone(), quote: quote.clone() });
-            env.storage().instance().set(&DataKey::Pairs, &pairs);
+            pairs.push_back(PricePair {
+                base: base.clone(),
+                quote: quote.clone(),
+            });
+            env.storage().persistent().set(&DataKey::Pairs, &pairs);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Pairs, 17280, 34560);
         }
 
         env.storage()
@@ -191,9 +202,7 @@ impl ForgeOracle {
             .set(&DataKey::UpdatedAt(pair), &now);
 
         // Extend TTL for StalenessThreshold to prevent silent fallback
-        env.storage()
-            .instance()
-            .extend_ttl(17280, 34560);
+        env.storage().instance().extend_ttl(17280, 34560);
 
         env.events().publish(
             (Symbol::new(&env, "price_updated"),),
@@ -280,7 +289,7 @@ impl ForgeOracle {
     ///
     /// - `env`: The Soroban environment.
     /// - `new_threshold`: The new maximum age of a price in seconds. A price is
-    ///   considered stale when `now >= updated_at + threshold`, i.e. the threshold
+    ///   considered stale when `now >= updated_at + threshold`, i.e., the threshold
     ///   is exclusive: a price is valid while `now < updated_at + threshold` and
     ///   stale at exactly `now == updated_at + threshold`.
     ///
@@ -300,9 +309,7 @@ impl ForgeOracle {
             .instance()
             .set(&DataKey::StalenessThreshold, &new_threshold);
         // Extend TTL to prevent silent fallback
-        env.storage()
-            .instance()
-            .extend_ttl(17280, 34560);
+        env.storage().instance().extend_ttl(17280, 34560);
         Ok(())
     }
 
@@ -341,7 +348,7 @@ impl ForgeOracle {
     /// for the same pair. A value of `0` disables the circuit breaker (default).
     ///
     /// # Parameters
-    /// - `bps`: Maximum deviation in basis points (e.g. `1000` = 10%). `0` disables the check.
+    /// - `bps`: Maximum deviation in basis points (e.g., `1000` = 10%). `0` disables the check.
     ///
     /// # Errors
     /// - [`OracleError::NotInitialized`] — contract not initialized
@@ -353,9 +360,7 @@ impl ForgeOracle {
             .get(&DataKey::Admin)
             .ok_or(OracleError::NotInitialized)?;
         admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxDeviation, &bps);
+        env.storage().instance().set(&DataKey::MaxDeviation, &bps);
         env.storage().instance().extend_ttl(17280, 34560);
         Ok(())
     }
@@ -378,16 +383,19 @@ impl ForgeOracle {
         }
         let pairs: Vec<PricePair> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::Pairs)
             .unwrap_or_else(|| vec![&env]);
         let mut result: Vec<PriceEntry> = vec![&env];
         for pair in pairs.iter() {
-            let price: i128 = env
+            let price: i128 = match env
                 .storage()
                 .persistent()
                 .get(&DataKey::Price(pair.clone()))
-                .unwrap_or(0);
+            {
+                Some(p) => p,
+                None => continue,
+            };
             let updated_at: u64 = env
                 .storage()
                 .persistent()
@@ -448,10 +456,12 @@ impl ForgeOracle {
 #[cfg(test)]
 mod tests {
     extern crate std;
+
     use super::*;
+
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
-        Env, Symbol, TryFromVal, IntoVal,
+        Env, IntoVal, Symbol, TryFromVal,
     };
 
     fn setup<'a>(env: &'a Env) -> (Address, ForgeOracleClient<'a>) {
@@ -489,44 +499,124 @@ mod tests {
         let client = ForgeOracleClient::new(&env, &contract_id);
 
         // Setup: Mock auth for admin so initialization succeeds
-        env.mock_auths(&[
-            soroban_sdk::testutils::MockAuth {
-                address: &admin,
-                invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                    contract: &contract_id,
-                    fn_name: "initialize",
-                    args: (&admin, 3600u64).into_val(&env),
-                    sub_invokes: &[],
-                },
-            }
-        ]);
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "initialize",
+                args: (&admin, 3600u64).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
         client.initialize(&admin, &3600);
 
         let base = Symbol::new(&env, "XLM");
         let quote = Symbol::new(&env, "USDC");
 
         // Mock auth for a non-admin to simulate unauthorized invocation
-        env.mock_auths(&[
-            soroban_sdk::testutils::MockAuth {
-                address: &non_admin,
-                invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                    contract: &contract_id,
-                    fn_name: "submit_price",
-                    args: (&base, &quote, 10_000_000i128).into_val(&env),
-                    sub_invokes: &[],
-                },
-            }
-        ]);
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &non_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "submit_price",
+                args: (&base, &quote, 10_000_000i128).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
 
         // Task 1 & 2: Test that a non-admin address calling submit_price() reverts.
         // Note: `require_auth` traps at the host level (Auth error), not as a contract enum.
         // `try_submit_price` captures this host rejection as an outer `Err`.
         let result = client.try_submit_price(&base, &quote, &10_000_000);
-        assert!(result.is_err(), "Expected transaction to revert due to lack of admin auth");
+        assert!(
+            result.is_err(),
+            "Expected transaction to revert due to lack of admin auth"
+        );
 
         // Task 3: Verify no price is stored after the failed call
         let price_result = client.try_get_price(&base, &quote);
-        assert_eq!(price_result, Err(Ok(OracleError::PriceNotFound)), "Price should not be stored after a failed submission");
+        assert_eq!(
+            price_result,
+            Err(Ok(OracleError::PriceNotFound)),
+            "Price should not be stored after a failed submission"
+        );
+    }
+
+    /// Test that set_staleness_threshold() requires admin authorization
+    #[test]
+    fn test_non_admin_set_staleness_threshold_rejected() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, ForgeOracle);
+        let client = ForgeOracleClient::new(&env, &contract_id);
+
+        // Setup: Mock auth for admin so initialization succeeds
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "initialize",
+                args: (&admin, 3600u64).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.initialize(&admin, &3600);
+
+        // Verify initial staleness threshold
+        assert_eq!(client.get_staleness_threshold(), 3600);
+
+        // Mock auth for attacker to simulate unauthorized invocation
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_staleness_threshold",
+                args: (7200u64).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        // Test that a non-admin address calling set_staleness_threshold() reverts
+        // Note: `require_auth` traps at the host level (Auth error), not as a contract enum.
+        // `try_set_staleness_threshold` captures this host rejection as an outer `Err`.
+        let result = client.try_set_staleness_threshold(&7200);
+        assert!(
+            result.is_err(),
+            "Expected transaction to revert due to lack of admin auth"
+        );
+
+        // Verify the staleness threshold has not changed after the failed call
+        assert_eq!(
+            client.get_staleness_threshold(),
+            3600,
+            "Staleness threshold should not change after failed call"
+        );
+
+        // Mock auth for admin and verify the admin can still update the threshold successfully
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_staleness_threshold",
+                args: (7200u64).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        let result = client.try_set_staleness_threshold(&7200);
+        assert!(
+            result.is_ok(),
+            "Admin should be able to update staleness threshold"
+        );
+
+        // Verify the threshold was updated successfully
+        assert_eq!(
+            client.get_staleness_threshold(),
+            7200,
+            "Staleness threshold should be updated after admin call"
+        );
     }
 
     #[test]
@@ -672,7 +762,71 @@ mod tests {
         }]);
 
         let result = client.try_initialize(&third_party, &3600);
-        assert!(result.is_err(), "initialize must revert when signer does not control the admin address");
+        assert!(
+            result.is_err(),
+            "initialize must revert when signer does not control the admin address"
+        );
+    }
+
+    /// Verifies the two-phase auth scenario for initialize():
+    /// Phase 1 — an attacker mocks auth for the admin address but is not that address;
+    ///            require_auth() on admin fails because attacker did not sign for admin.
+    /// Phase 2 — the real admin mocks auth for their own address; require_auth() succeeds.
+    /// Post-init — get_admin() returns admin, not attacker.
+    #[test]
+    fn test_attacker_signing_for_admin_address_is_rejected() {
+        use soroban_sdk::IntoVal;
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ForgeOracle);
+        let client = ForgeOracleClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        // Phase 1: attacker signs, but initialize() is called with admin as the admin arg.
+        // admin.require_auth() checks that admin signed — attacker did not, so this must fail.
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "initialize",
+                args: (&admin, 3600u64).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        let result = client.try_initialize(&admin, &3600);
+        assert!(
+            result.is_err(),
+            "initialize must revert when attacker signs for admin address"
+        );
+
+        // Phase 2: admin signs for their own address — require_auth() is satisfied.
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "initialize",
+                args: (&admin, 3600u64).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        let result = client.try_initialize(&admin, &3600);
+        assert!(
+            result.is_ok(),
+            "initialize must succeed when admin signs for their own address"
+        );
+
+        // Post-init: get_admin() must return admin, not attacker.
+        assert_eq!(
+            client.get_admin(),
+            admin,
+            "get_admin() must return the admin address"
+        );
+        assert_ne!(
+            client.get_admin(),
+            attacker,
+            "get_admin() must not return the attacker address"
+        );
     }
 
     #[test]
@@ -731,7 +885,10 @@ mod tests {
             },
         }]);
         let result = client.try_submit_price(&base, &quote, &20_000_000);
-        assert!(result.is_err(), "Old admin should not be able to submit prices");
+        assert!(
+            result.is_err(),
+            "Old admin should not be able to submit prices"
+        );
     }
 
     #[test]
@@ -887,12 +1044,14 @@ mod tests {
         client.submit_price(&base, &quote, &price);
 
         // At exact boundary
-        env.ledger().with_mut(|l| l.timestamp = submit_time + threshold);
+        env.ledger()
+            .with_mut(|l| l.timestamp = submit_time + threshold);
         let data = client.get_price_unsafe(&base, &quote);
         assert_eq!(data.price, price);
 
         // One second past boundary
-        env.ledger().with_mut(|l| l.timestamp = submit_time + threshold + 1);
+        env.ledger()
+            .with_mut(|l| l.timestamp = submit_time + threshold + 1);
         let data = client.get_price_unsafe(&base, &quote);
         assert_eq!(data.price, price);
     }
@@ -1046,8 +1205,14 @@ mod tests {
 
         // Verify BTC/USDC was NOT affected
         let btc_data = client.get_price(&btc, &usdc);
-        assert_eq!(btc_data.price, btc_price_v1, "BTC price should not have changed");
-        assert_eq!(btc_data.updated_at, 1000, "BTC timestamp should not have changed");
+        assert_eq!(
+            btc_data.price, btc_price_v1,
+            "BTC price should not have changed"
+        );
+        assert_eq!(
+            btc_data.updated_at, 1000,
+            "BTC timestamp should not have changed"
+        );
     }
 
     /// Test that three different pairs can coexist and each maintains independent state.
@@ -1065,10 +1230,10 @@ mod tests {
 
         // Submit prices for three pairs at different times
         client.submit_price(&xlm, &usdc, &11_000_000);
-        
+
         env.ledger().with_mut(|l| l.timestamp = 1500);
         client.submit_price(&btc, &usdc, &70_000_000_000);
-        
+
         env.ledger().with_mut(|l| l.timestamp = 2000);
         client.submit_price(&eth, &usdc, &3_500_000_000);
 
@@ -1218,9 +1383,21 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 1000);
         let (_, client) = setup(&env);
 
-        client.submit_price(&Symbol::new(&env, "XLM"), &Symbol::new(&env, "USDC"), &10_000_000);
-        client.submit_price(&Symbol::new(&env, "BTC"), &Symbol::new(&env, "USDC"), &70_000_000_000);
-        client.submit_price(&Symbol::new(&env, "ETH"), &Symbol::new(&env, "USDC"), &3_500_000_000);
+        client.submit_price(
+            &Symbol::new(&env, "XLM"),
+            &Symbol::new(&env, "USDC"),
+            &10_000_000,
+        );
+        client.submit_price(
+            &Symbol::new(&env, "BTC"),
+            &Symbol::new(&env, "USDC"),
+            &70_000_000_000,
+        );
+        client.submit_price(
+            &Symbol::new(&env, "ETH"),
+            &Symbol::new(&env, "USDC"),
+            &3_500_000_000,
+        );
 
         let entries = client.get_all_prices();
         assert_eq!(entries.len(), 3);
@@ -1268,7 +1445,10 @@ mod tests {
         let env = Env::default();
         let contract_id = env.register_contract(None, ForgeOracle);
         let client = ForgeOracleClient::new(&env, &contract_id);
-        assert_eq!(client.try_get_all_prices(), Err(Ok(OracleError::NotInitialized)));
+        assert_eq!(
+            client.try_get_all_prices(),
+            Err(Ok(OracleError::NotInitialized))
+        );
     }
 
     // ── Circuit breaker tests ─────────────────────────────────────────────────
@@ -1350,5 +1530,152 @@ mod tests {
         // 10x price jump — should be accepted because circuit breaker is off
         let result = client.try_submit_price(&base, &quote, &100_000_000);
         assert!(result.is_ok());
+    }
+
+    // ── Issue #337: set_max_price_deviation end-to-end flow ──────────────────
+
+    /// Full end-to-end test for set_max_price_deviation():
+    ///   1. Submit initial price of 10_000_000 (1.0 USDC)
+    ///   2. Set max deviation to 1000 bps (10%)
+    ///   3. 11.1% increase (11_100_000) → PriceDeviationTooHigh
+    ///   4. 9% increase (10_900_000) → success
+    ///   5. 17% decrease from 10_900_000 → 9_000_000 → PriceDeviationTooHigh
+    ///   6. set_max_price_deviation(0) disables check → previously blocked price now succeeds
+    #[test]
+    fn test_set_max_price_deviation_end_to_end() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (_, client) = setup(&env); // staleness = 3600
+
+        let base = Symbol::new(&env, "XLM");
+        let quote = Symbol::new(&env, "USDC");
+
+        // Step 1: submit initial price of 10_000_000 (1.0 USDC)
+        client.submit_price(&base, &quote, &10_000_000);
+        let data = client.get_price_unsafe(&base, &quote);
+        assert_eq!(data.price, 10_000_000);
+
+        // Step 2: set max deviation to 1000 bps (10%)
+        client.set_max_price_deviation(&1000);
+
+        // Step 3: 11.1% increase → 11_100_000; deviation = (1_100_000 * 10_000) / 10_000_000 = 1100 bps > 1000 → blocked
+        let result = client.try_submit_price(&base, &quote, &11_100_000);
+        assert_eq!(
+            result,
+            Err(Ok(OracleError::PriceDeviationTooHigh)),
+            "11.1% increase must be blocked by 10% circuit breaker"
+        );
+        // Price must remain unchanged
+        assert_eq!(client.get_price_unsafe(&base, &quote).price, 10_000_000);
+
+        // Step 4: 9% increase → 10_900_000; deviation = (900_000 * 10_000) / 10_000_000 = 900 bps <= 1000 → accepted
+        let result = client.try_submit_price(&base, &quote, &10_900_000);
+        assert!(
+            result.is_ok(),
+            "9% increase must be accepted within 10% threshold"
+        );
+        assert_eq!(client.get_price_unsafe(&base, &quote).price, 10_900_000);
+
+        // Step 5: 17% decrease from 10_900_000 → 9_000_000
+        // deviation = (1_900_000 * 10_000) / 10_900_000 ≈ 1743 bps > 1000 → blocked
+        let result = client.try_submit_price(&base, &quote, &9_000_000);
+        assert_eq!(
+            result,
+            Err(Ok(OracleError::PriceDeviationTooHigh)),
+            "17% decrease must be blocked by 10% circuit breaker"
+        );
+        // Price must remain at 10_900_000
+        assert_eq!(client.get_price_unsafe(&base, &quote).price, 10_900_000);
+
+        // Step 6: disable circuit breaker by setting bps = 0
+        client.set_max_price_deviation(&0);
+
+        // Previously blocked price (9_000_000) must now succeed
+        let result = client.try_submit_price(&base, &quote, &9_000_000);
+        assert!(
+            result.is_ok(),
+            "previously blocked price must succeed after disabling circuit breaker"
+        );
+        assert_eq!(client.get_price_unsafe(&base, &quote).price, 9_000_000);
+    }
+
+    /// Test that get_price() and get_price_unsafe() return identical PriceData when price is fresh,
+    /// and that get_price() reverts with PriceStale while get_price_unsafe() returns stale data after threshold.
+    #[test]
+    fn test_get_price_and_get_price_unsafe_fresh_and_stale_behavior() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        // Set up with known timestamp and threshold
+        let submit_time = 1000u64;
+        let staleness_threshold = 3600u64;
+        env.ledger().with_mut(|l| l.timestamp = submit_time);
+        let (_, client) = setup(&env); // uses 3600 threshold by default
+
+        let base = Symbol::new(&env, "XLM");
+        let quote = Symbol::new(&env, "USDC");
+        let price = 25_000_000i128; // 2.5 USDC per XLM
+
+        // Task 1: Submit a price at a known timestamp
+        client.submit_price(&base, &quote, &price);
+
+        // Task 2: While price is fresh, call both functions and assert identical results
+        let fresh_data_safe = client.get_price(&base, &quote);
+        let fresh_data_unsafe = client.get_price_unsafe(&base, &quote);
+
+        // Assert price_data.price is identical from both calls
+        assert_eq!(
+            fresh_data_safe.price, fresh_data_unsafe.price,
+            "get_price() and get_price_unsafe() should return identical price when fresh"
+        );
+        assert_eq!(
+            fresh_data_safe.price, price,
+            "Price should match submitted value"
+        );
+
+        // Assert price_data.updated_at is identical from both calls
+        assert_eq!(
+            fresh_data_safe.updated_at, fresh_data_unsafe.updated_at,
+            "get_price() and get_price_unsafe() should return identical updated_at when fresh"
+        );
+        assert_eq!(
+            fresh_data_safe.updated_at, submit_time,
+            "updated_at should match submission timestamp"
+        );
+
+        // Task 3: Advance past staleness threshold and assert get_price() reverts
+        let stale_time = submit_time + staleness_threshold + 100; // 100 seconds past threshold
+        env.ledger().with_mut(|l| l.timestamp = stale_time);
+
+        let result = client.try_get_price(&base, &quote);
+        assert_eq!(
+            result,
+            Err(Ok(OracleError::PriceStale)),
+            "get_price() should revert with PriceStale when price is stale"
+        );
+
+        // Task 4: Assert get_price_unsafe() still returns the same stale data
+        let stale_data_unsafe = client.get_price_unsafe(&base, &quote);
+
+        // Should return the same price and updated_at as when fresh
+        assert_eq!(
+            stale_data_unsafe.price, price,
+            "get_price_unsafe() should return the same price even when stale"
+        );
+        assert_eq!(
+            stale_data_unsafe.updated_at, submit_time,
+            "get_price_unsafe() should return the same updated_at even when stale"
+        );
+
+        // Verify the stale data matches the original fresh data from get_price_unsafe()
+        assert_eq!(
+            stale_data_unsafe.price, fresh_data_unsafe.price,
+            "Stale price should match fresh price from get_price_unsafe()"
+        );
+        assert_eq!(
+            stale_data_unsafe.updated_at, fresh_data_unsafe.updated_at,
+            "Stale updated_at should match fresh updated_at from get_price_unsafe()"
+        );
     }
 }

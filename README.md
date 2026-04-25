@@ -2,11 +2,131 @@
 
 **Reusable Soroban smart contract primitives for the Stellar ecosystem.**
 
-StellarForge is a collection of production-ready, well-tested Soroban contracts that developers can deploy directly or use as building blocks for more complex DeFi applications on Stellar.
+StellarForge is a collection of production-ready, well-tested smart contracts built on [Soroban](https://developers.stellar.org/docs/smart-contracts/overview) — Stellar's Rust-based smart contract platform. Each contract is a self-contained primitive (vesting, streaming payments, multisig, governance, and price feeds) that you can deploy as-is or compose into larger DeFi applications. All contracts are written in safe Rust with no external dependencies beyond the Soroban SDK, and every error path and state transition is covered by tests.
 
 ---
 
-## 📊 Contract Comparison
+## 📦 Installation
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+| :--- | :--- | :--- |
+| [Rust](https://rustup.rs/) | stable (2021 edition) | Install via `rustup` |
+| WASM target `wasm32v1-none` | — | Required by the Soroban runtime |
+| [Stellar CLI](https://developers.stellar.org/docs/smart-contracts/getting-started/setup) | ≥ 25.2.0 | Used to build, deploy, and invoke contracts |
+
+### Install dependencies
+
+```bash
+# 1. Install Rust (skip if already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 2. Add the WebAssembly target
+rustup target add wasm32v1-none
+
+# 3. Install the Stellar CLI
+cargo install --locked stellar-cli
+```
+
+### Get the code and build
+
+```bash
+git clone https://github.com/Austinaminu2/stellarforge.git
+cd stellarforge
+make build
+```
+
+For a full walkthrough including running tests and deploying to testnet, see the [Prerequisites & Setup](#️-prerequisites--setup) section.
+
+---
+
+## 🖼️ Project Screenshots
+
+### Architecture Overview
+
+```mermaid
+graph TB
+    subgraph "StellarForge Ecosystem"
+        A[forge-vesting] --> D[Stellar Network]
+        B[forge-stream] --> D
+        C[forge-multisig] --> D
+        E[forge-governor] --> D
+        F[forge-oracle] --> D
+        G[forge-vesting-factory] --> D
+    end
+    
+    subgraph "Core Components"
+        H[forge-errors] --> A
+        H --> B
+        H --> C
+        H --> E
+        H --> F
+        H --> G
+    end
+    
+    I[DeFi Applications] --> A
+    I --> B
+    I --> C
+    I --> E
+    I --> F
+    I --> G
+```
+
+*StellarForge provides a modular suite of production-ready smart contracts for the Stellar ecosystem.*
+
+### Contract Interaction Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Governor as forge-governor
+    participant Multisig as forge-multisig
+    participant Stream as forge-stream
+    participant Vesting as forge-vesting
+    
+    User->>Governor: Create proposal
+    Governor->>Multisig: Execute approved proposal
+    Multisig->>Stream: Create payment stream
+    Stream->>Vesting: Fund vesting schedule
+    Vesting->>User: Release vested tokens
+```
+
+*Visual representation of how different StellarForge contracts interact with each other.*
+
+### Vesting Schedule Visualization
+
+```mermaid
+gantt
+    title Token Vesting Schedule
+    dateFormat  YYYY-MM-DD
+    section Cliff Period
+    No tokens released :active, cliff, 2024-01-01, 90d
+    section Linear Vesting
+    Gradual release :vest, after cliff, 2024-04-01, 270d
+    section Fully Vested
+    All tokens available :done, 2025-01-01, 1d
+```
+
+*Example of a typical vesting schedule with cliff period and linear vesting.*
+
+### Streaming Payment Interface
+
+```mermaid
+graph LR
+    A[Sender] -->|Rate: 1 XLM/sec| B[forge-stream]
+    B -->|Continuous flow| C[Recipient]
+    B -->|Real-time tracking| D[Stream Dashboard]
+    D -->|Balance: 45.5 XLM| C
+    D -->|Time remaining: 2h 15m| A
+```
+
+*Real-time visualization of token streaming payments.*
+
+---
+
+## �📊 Contract Comparison
 Developers evaluating StellarForge can use this table to quickly identify the right primitive for their specific use case.
 
 | Contract | Use Case | Admin Required | Events Emitted | Timelock |
@@ -16,7 +136,7 @@ Developers evaluating StellarForge can use this table to quickly identify the ri
 | [`forge-oracle`](#forge-oracle) | Price Feed | Yes (Admin) | `price_updated` | No |
 | [`forge-stream`](#forge-stream) | Real-time Payments | No (Stream-specific) | `stream_created`, `withdrawn`, `stream_cancelled`, `stream_paused`, `stream_resumed` | No |
 | [`forge-vesting`](#forge-vesting) | Token Vesting | Yes (Admin) | `vesting_initialized`, `claimed`, `vesting_cancelled`, `admin_transferred` | Yes (Cliff period) |
-
+| [`forge-vesting-factory`](#forge-vesting-factory) | Multi-beneficiary Vesting | Yes (Per-schedule Admin) | `schedule_created`, `claimed`, `schedule_cancelled` | Yes (Cliff period) |
 ---
 
 ## 🔒 Audit Status
@@ -56,7 +176,33 @@ We are committed to obtaining formal audits before recommending production deplo
 - `forge-governor`: Coordinate protocol upgrades by routing proposals through a token-weighted voting process and enforcing execution delays, and tune parameters like fees or collateral ratios in a transparent governance flow.
 - `forge-oracle`: Feed DEX price data into AMM pools for accurate swap pricing and slippage control, or provide collateral valuation updates for lending markets so borrowing power adjusts to live market conditions.
 
-## 📜 Contract Details
+## � Shared Error Crate
+
+### forge-errors
+
+A shared error library providing common error variants used across all StellarForge contracts. This reduces code duplication and enables integrators to handle common error scenarios with shared logic.
+
+**Common Error Variants:**
+- `AlreadyInitialized` - Contract has already been initialized
+- `NotInitialized` - Contract has not been initialized  
+- `Unauthorized` - Caller is not authorized to perform the action
+
+**Usage in Contracts:**
+Each contract imports `forge-errors::CommonError` and re-exports the shared variants alongside contract-specific errors:
+
+```rust
+use forge_errors::CommonError;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum ContractError {
+    #[from(CommonError)]
+    Common(CommonError),
+    // Contract-specific variants...
+}
+```
+
+## �📜 Contract Details
 
 ### forge-vesting
 Deploy tokens on a vesting schedule with an optional cliff period. Perfect for team allocations or advisor tokens.
@@ -68,6 +214,18 @@ Deploy tokens on a vesting schedule with an optional cliff period. Perfect for t
   * `get_vesting_schedule()` — public-facing; returns token, beneficiary, amounts, and timing. No admin address or cancellation state.
   * `get_status()` — public-facing; returns claimable amount, vested amount, cliff status, and pause state.
   * `get_config()` — admin tooling only; returns the full internal config including admin address and cancellation flag. Prefer the two functions above for UI integrations.
+
+### forge-vesting-factory
+A single-deployment factory that manages multiple vesting schedules. Eliminates the need to deploy a separate contract per beneficiary — ideal for companies vesting tokens for many employees or investors.
+
+* **Key Function:** `create_schedule(token, beneficiary, admin, total_amount, cliff_seconds, duration_seconds) -> u64` — creates a new schedule and returns its `schedule_id`. Transfers tokens from admin into the factory on creation.
+
+📖 **[Detailed Documentation →](contracts/forge-vesting-factory/README.md)**
+* **Action:** `claim(schedule_id)` — beneficiary withdraws all currently unlocked tokens for that schedule.
+* **Security:** `cancel(schedule_id)` — admin cancels a schedule; vested tokens go to the beneficiary, unvested tokens return to the admin.
+* **Read functions:**
+  * `get_status(schedule_id)` — returns vested, claimed, claimable, cliff status, and cancellation state.
+  * `get_schedule_count()` — returns the total number of schedules ever created.
 
 ### forge-stream
 Pay-per-second token streams. Ideal for payroll, subscriptions, or real-time contractor payments.
@@ -143,62 +301,73 @@ The tables below are verified against the current contract code in `contracts/*/
 
 ## 🛠️ Prerequisites & Setup
 
-Soroban is Stellar’s smart contract platform, built for performance and developer-friendly Rust tooling. Learn more in the [official docs](https://developers.stellar.org/docs/smart-contracts/overview).
+[Soroban](https://developers.stellar.org/docs/smart-contracts/overview) is Stellar's smart contract platform built on Rust. Follow the steps below to get your environment ready from scratch.
 
-To build and test these contracts, you will need the following tools:
+### Step 1 — Install Rust
 
-#### Rust Requirements
-- **Rust Edition:** 2021
-- **Target:** `wasm32v1-none` (v1 instruction set recommended for Soroban)
+If you don't have Rust installed, get it via [rustup](https://rustup.rs/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then restart your terminal (or run `source ~/.cargo/env`) so the `cargo` and `rustup` commands are available.
+
+### Step 2 — Add the WebAssembly target
+
+Soroban contracts compile to WebAssembly. Add the required target:
 
 ```bash
 rustup target add wasm32v1-none
 ```
 
-#### CLI Installation
-The `stellar-cli` is essential for building, deploying, and interacting with Soroban contracts. **v25.2.0 or higher** is recommended.
+> **Why?** Soroban runs contracts as WASM binaries. The `wasm32v1-none` target tells the Rust compiler to produce WASM output compatible with the Soroban runtime.
+
+### Step 3 — Install the Stellar CLI
+
+The `stellar-cli` tool lets you build, deploy, and invoke contracts. **Version 25.2.0 or higher** is required.
 
 ```bash
 cargo install --locked stellar-cli
 ```
 
-#### Funding Testnet Accounts
-Before deploying, you'll need a funded testnet account. You can generate and fund one easily:
+Verify the installation:
 
 ```bash
-stellar keys generate <identity_name> --network testnet --fund
+stellar --version
 ```
 
-### Using Make (Recommended)
-This project includes a Makefile with common development commands:
+### Step 4 — Clone the repository
 
-| Command | Description |
-| :--- | :--- |
-| `make build` | Build all workspace crates |
-| `make test` | Run all tests |
-| `make lint` | Run clippy linter with deny warnings |
-| `make fmt` | Format code |
-| `make check` | Run fmt + lint + test in sequence |
-| `make clean` | Clean build artifacts |
+```bash
+git clone https://github.com/Austinaminu2/stellarforge.git
+cd stellarforge
+```
 
-### Build all contracts
+### Step 5 — Build the contracts
 
 ```bash
 make build
-# or manually:
+```
+
+<details>
+<summary>Run without Make</summary>
+
+```bash
 cargo build --workspace
 stellar contract build
 ```
 
-### Run all tests
+</details>
+
+### Step 6 — Run the tests
 
 ```bash
 make test
-# or manually:
-cargo test --workspace
 ```
 
-### Run a specific contract's tests
+<details>
+<summary>Run a single contract’s tests</summary>
 
 ```bash
 cargo test -p forge-vesting
@@ -208,6 +377,47 @@ cargo test -p forge-governor
 cargo test -p forge-oracle
 ```
 
+</details>
+
+### Step 7 — (Optional) Fund a testnet account
+
+If you want to deploy contracts to Stellar testnet, generate and fund a test identity:
+
+```bash
+stellar keys generate <your-identity-name> --network testnet --fund
+```
+
+Replace `<your-identity-name>` with any label you like (e.g., `alice`). The `--fund` flag automatically requests test tokens from the Stellar Friendbot.
+
+---
+
+## ⚙️ Optional: Environment Configuration
+
+For convenience, you can store commonly used values in a `.env` file.
+
+1. Copy the example:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Fill in values like network, identity, or contract IDs.
+
+> Note: The project does not require `.env` to run. This is only for developer convenience when working with repeated CLI commands.
+
+
+---
+
+### Make command reference
+
+| Command | Description |
+| :--- | :--- |
+| `make build` | Build all workspace crates |
+| `make test` | Run all tests |
+| `make lint` | Run clippy linter with deny warnings |
+| `make fmt` | Format code |
+| `make check` | Run fmt + lint + test in sequence |
+| `make clean` | Clean build artifacts |
 ---
 
 ## 🚀 Testnet Deployment

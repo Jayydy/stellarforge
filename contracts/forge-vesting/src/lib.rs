@@ -10,6 +10,7 @@
 //! - Beneficiary can call `claim()` at any time to withdraw unlocked tokens
 //! - Admin can cancel vesting and reclaim unvested tokens
 
+use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
 };
@@ -28,26 +29,18 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone)]
 pub struct VestingConfig {
-    /// Token contract address
     pub token: Address,
-    /// Beneficiary who receives vested tokens
     pub beneficiary: Address,
-    /// Admin who can cancel vesting
     pub admin: Address,
-    /// Total tokens to vest
     pub total_amount: i128,
-    /// Timestamp when vesting starts
     pub start_time: u64,
-    /// Seconds before any tokens unlock
     pub cliff_seconds: u64,
-    /// Total vesting duration in seconds
     pub duration_seconds: u64,
-    /// Whether vesting has been cancelled
     pub cancelled: bool,
     /// Whether vesting is currently paused
     pub paused: bool,
-    /// Ledger timestamp when vesting was paused (0 if not paused)
-    pub paused_at: u64,
+    /// Ledger timestamp when vesting was paused (None if not paused)
+    pub paused_at: Option<u64>,
 }
 
 #[contracttype]
@@ -88,13 +81,11 @@ pub struct VestingSchedule {
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VestingError {
-    AlreadyInitialized = 1,
-    NotInitialized = 2,
-    Unauthorized = 3,
+    #[from(CommonError)]
+    Common(CommonError),
     CliffNotReached = 4,
     NothingToClaim = 5,
     Cancelled = 6,
-    InvalidConfig = 7,
     SameAdmin = 8,
     SameBeneficiary = 11,
     BeneficiaryAsAdmin = 12,
@@ -149,10 +140,10 @@ impl ForgeVesting {
         duration_seconds: u64,
     ) -> Result<(), VestingError> {
         if env.storage().instance().has(&DataKey::Config) {
-            return Err(VestingError::AlreadyInitialized);
+            return Err(VestingError::Common(CommonError::AlreadyInitialized));
         }
         if total_amount <= 0 || duration_seconds == 0 || cliff_seconds > duration_seconds {
-            return Err(VestingError::InvalidConfig);
+            return Err(VestingError::Common(CommonError::InvalidConfig));
         }
         if admin == beneficiary {
             return Err(VestingError::BeneficiaryAsAdmin);
@@ -170,7 +161,7 @@ impl ForgeVesting {
             duration_seconds,
             cancelled: false,
             paused: false,
-            paused_at: 0,
+            paused_at: None,
         };
 
         env.storage().instance().set(&DataKey::Config, &config);
@@ -200,6 +191,7 @@ impl ForgeVesting {
     /// # Errors
     /// - [`VestingError::NotInitialized`] — `initialize` has not been called.
     /// - [`VestingError::Cancelled`] — The vesting schedule was cancelled by the admin.
+    /// - [`VestingError::Paused`] — The vesting schedule is currently paused.
     /// - [`VestingError::CliffNotReached`] — Current time is before `start_time + cliff_seconds`.
     /// - [`VestingError::NothingToClaim`] — All vested tokens have already been claimed.
     ///
@@ -306,7 +298,9 @@ impl ForgeVesting {
 
         config.cancelled = true;
         env.storage().instance().set(&DataKey::Config, &config);
-        env.storage().instance().set(&DataKey::VestedAtCancel, &vested);
+        env.storage()
+            .instance()
+            .set(&DataKey::VestedAtCancel, &vested);
         // Update claimed to vested so get_status().claimable reflects 0 after cancel payout
         env.storage().instance().set(&DataKey::Claimed, &vested);
 
@@ -314,7 +308,11 @@ impl ForgeVesting {
 
         // Transfer vested-but-unclaimed tokens to beneficiary
         if to_beneficiary > 0 {
-            token_client.transfer(&env.current_contract_address(), &config.beneficiary, &to_beneficiary);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &config.beneficiary,
+                &to_beneficiary,
+            );
         }
 
         // Transfer unvested tokens to admin
@@ -368,7 +366,9 @@ impl ForgeVesting {
 
         config.cancelled = true;
         env.storage().instance().set(&DataKey::Config, &config);
-        env.storage().instance().set(&DataKey::VestedAtCancel, &vested);
+        env.storage()
+            .instance()
+            .set(&DataKey::VestedAtCancel, &vested);
         env.storage()
             .instance()
             .set(&DataKey::Claimed, &(claimed + to_beneficiary));
@@ -382,15 +382,13 @@ impl ForgeVesting {
             );
         }
         if to_admin > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &config.admin,
-                &to_admin,
-            );
+            token_client.transfer(&env.current_contract_address(), &config.admin, &to_admin);
         }
 
-        env.events()
-            .publish((Symbol::new(&env, "claimed"),), (&config.beneficiary, to_beneficiary));
+        env.events().publish(
+            (Symbol::new(&env, "claimed"),),
+            (&config.beneficiary, to_beneficiary),
+        );
         env.events().publish(
             (Symbol::new(&env, "vesting_cancelled"),),
             (&config.admin, to_admin, &config.beneficiary, to_beneficiary),
@@ -556,6 +554,8 @@ impl ForgeVesting {
         })
     }
 
+    pub fn get_config(env: Env) -> Result<VestingConfig, VestingError> {
+        env.storage()
     /// Return the full vesting configuration set at initialization.
     ///
     /// Exposes all fields of [`VestingConfig`] including token, beneficiary, admin,
@@ -630,6 +630,7 @@ impl ForgeVesting {
     ///
     /// # Errors
     /// - [`VestingError::NotInitialized`] — Contract not initialized.
+    /// - [`VestingError::Cancelled`] — The vesting schedule has been cancelled.
     /// - [`VestingError::Paused`] — Already paused.
     pub fn pause(env: Env) -> Result<(), VestingError> {
         let mut config: VestingConfig = env
@@ -640,12 +641,16 @@ impl ForgeVesting {
 
         config.admin.require_auth();
 
+        if config.cancelled {
+            return Err(VestingError::Cancelled);
+        }
+
         if config.paused {
             return Err(VestingError::Paused);
         }
 
         config.paused = true;
-        config.paused_at = env.ledger().timestamp();
+        config.paused_at = Some(env.ledger().timestamp());
         env.storage().instance().set(&DataKey::Config, &config);
 
         Ok(())
@@ -659,7 +664,8 @@ impl ForgeVesting {
     ///
     /// # Errors
     /// - [`VestingError::NotInitialized`] — Contract not initialized.
-    /// - [`VestingError::NotPaused`] — Not currently paused.
+    /// - [`VestingError::Cancelled`] — The vesting schedule has been cancelled.
+    /// - [`VestingError::NotPaused`] — Schedule is not currently paused.
     pub fn unpause(env: Env) -> Result<(), VestingError> {
         let mut config: VestingConfig = env
             .storage()
@@ -669,15 +675,20 @@ impl ForgeVesting {
 
         config.admin.require_auth();
 
+        if config.cancelled {
+            return Err(VestingError::Cancelled);
+        }
+
         if !config.paused {
             return Err(VestingError::NotPaused);
         }
 
         let now = env.ledger().timestamp();
-        let delta = now.saturating_sub(config.paused_at);
+        let paused_at = config.paused_at.unwrap_or(now);
+        let delta = now.saturating_sub(paused_at);
         config.start_time = config.start_time.saturating_add(delta);
         config.paused = false;
-        config.paused_at = 0;
+        config.paused_at = None;
         env.storage().instance().set(&DataKey::Config, &config);
 
         Ok(())
@@ -697,7 +708,11 @@ impl ForgeVesting {
         if config.cancelled {
             return 0;
         }
-        let effective_now = if config.paused { config.paused_at } else { now };
+        let effective_now = if config.paused {
+            config.paused_at.unwrap_or(now)
+        } else {
+            now
+        };
         let elapsed = effective_now.saturating_sub(config.start_time);
         if elapsed < config.cliff_seconds {
             return 0;
@@ -712,9 +727,12 @@ impl ForgeVesting {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod test {
 mod tests {
     extern crate std;
+
     use super::*;
+
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
         Address, Env,
@@ -728,6 +746,24 @@ mod tests {
         let beneficiary = Address::generate(&env);
         let admin = Address::generate(&env);
         (env, contract_id, token, beneficiary, admin)
+    }
+
+    fn setup_with_token() -> (Env, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeVesting);
+        let token_admin = Address::generate(&env);
+        let stellar_asset = env.register_stellar_asset_contract_v2(token_admin);
+        let token_id = stellar_asset.address();
+        let beneficiary = Address::generate(&env);
+        let admin = Address::generate(&env);
+
+        {
+            let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+            token_client.mint(&contract_id, &1_000_000);
+        }
+
+        (env, contract_id, token_id, beneficiary, admin)
     }
 
     #[test]
@@ -752,9 +788,9 @@ mod tests {
 
     #[test]
     fn test_claim_after_failed_cancel_succeeds() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
-        client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &100, &1000);
 
         // Mock token transfer for claim
         env.mock_all_auths();
@@ -774,9 +810,10 @@ mod tests {
 
     #[test]
     fn test_compute_vested_dust_verification() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        // setup_with_token mints 1_000_000; we only vest 1000 here
         let client = ForgeVestingClient::new(&env, &contract_id);
-        client.initialize(&token, &beneficiary, &admin, &1000, &0, &3);
+        client.initialize(&token_id, &beneficiary, &admin, &1000, &0, &3);
 
         env.mock_all_auths();
 
@@ -785,17 +822,17 @@ mod tests {
 
         // t=1
         env.ledger().with_mut(|l| l.timestamp = start_ts + 1);
-        let v1 = client.claim().unwrap();
+        let v1 = client.claim();
         assert_eq!(v1, 333); // (1000 * 1) / 3 = 333
 
         // t=2
         env.ledger().with_mut(|l| l.timestamp = start_ts + 2);
-        let v2 = client.claim().unwrap();
+        let v2 = client.claim();
         assert_eq!(v2, 333); // (1000 * 2) / 3 - 333 = 666 - 333 = 333
 
         // t=3
         env.ledger().with_mut(|l| l.timestamp = start_ts + 3);
-        let v3 = client.claim().unwrap();
+        let v3 = client.claim();
         assert_eq!(v3, 334); // 1000 - 666 = 334
 
         assert_eq!(v1 + v2 + v3, 1000);
@@ -840,7 +877,6 @@ mod tests {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token, &beneficiary, &admin, &1_000_000, &500, &1000);
-        // advance 100s — still before cliff of 500
         env.ledger().with_mut(|l| l.timestamp += 100);
         let result = client.try_claim();
         assert_eq!(result, Err(Ok(VestingError::CliffNotReached)));
@@ -861,6 +897,13 @@ mod tests {
     fn test_get_vesting_schedule_returns_init_params() {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
+        let result = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &2000, &1000);
+        assert_eq!(result, Err(Ok(VestingError::InvalidConfig)));
+    }
+
+    #[test]
+    fn test_cancel_by_admin() {
+        let (env, contract_id, token, beneficiary, admin) = setup_with_token();
         client.initialize(&token, &beneficiary, &admin, &2_500_000, &200, &5000);
 
         let schedule = client.get_vesting_schedule();
@@ -890,6 +933,8 @@ mod tests {
     }
 
     #[test]
+    fn test_double_cancel_fails() {
+        let (env, contract_id, token, beneficiary, admin) = setup_with_token();
     fn test_get_vesting_schedule_fails_when_not_initialized() {
         let (env, contract_id, _, _, _) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
@@ -898,6 +943,8 @@ mod tests {
     }
 
     #[test]
+    fn test_claim_after_cancel_fails() {
+        let (env, contract_id, token, beneficiary, admin) = setup_with_token();
     fn test_schedule_and_status_provide_full_ui_info_without_get_config() {
         // get_vesting_schedule() + get_status() together expose everything a UI
         // needs: token, beneficiary, amounts, timing, claimable — without
@@ -930,6 +977,105 @@ mod tests {
         // cliff > duration is invalid
         let result = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &2000, &1000);
         assert_eq!(result, Err(Ok(VestingError::InvalidConfig)));
+    }
+
+    /// Test initialize() with total_amount = 0 returns InvalidConfig
+    #[test]
+    fn test_initialize_total_amount_zero_returns_invalid_config() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        // Try to initialize with total_amount = 0
+        let result = client.try_initialize(&token, &beneficiary, &admin, &0, &100, &1000);
+        assert_eq!(result, Err(Ok(VestingError::InvalidConfig)));
+
+        // Verify no config is stored after failed call
+        let config_result = client.try_get_config();
+        assert_eq!(config_result, Err(Ok(VestingError::NotInitialized)));
+    }
+
+    /// Test initialize() with total_amount = -1 returns InvalidConfig
+    #[test]
+    fn test_initialize_total_amount_negative_returns_invalid_config() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        // Try to initialize with total_amount = -1
+        let result = client.try_initialize(&token, &beneficiary, &admin, &-1, &100, &1000);
+        assert_eq!(result, Err(Ok(VestingError::InvalidConfig)));
+
+        // Verify no config is stored after failed call
+        let config_result = client.try_get_config();
+        assert_eq!(config_result, Err(Ok(VestingError::NotInitialized)));
+    }
+
+    /// Test initialize() with duration_seconds = 0 returns InvalidConfig
+    #[test]
+    fn test_initialize_duration_zero_returns_invalid_config() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        // Try to initialize with duration_seconds = 0
+        let result = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &100, &0);
+        assert_eq!(result, Err(Ok(VestingError::InvalidConfig)));
+
+        // Verify no config is stored after failed call
+        let config_result = client.try_get_config();
+        assert_eq!(config_result, Err(Ok(VestingError::NotInitialized)));
+    }
+
+    /// Test that subsequent valid initialize() succeeds after failed attempts
+    #[test]
+    fn test_valid_initialize_succeeds_after_invalid_attempts() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        // Attempt 1: total_amount = 0 (should fail)
+        let result1 = client.try_initialize(&token, &beneficiary, &admin, &0, &100, &1000);
+        assert_eq!(result1, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_config(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        // Attempt 2: total_amount = -1 (should fail)
+        let result2 = client.try_initialize(&token, &beneficiary, &admin, &-1, &100, &1000);
+        assert_eq!(result2, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_config(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        // Attempt 3: duration_seconds = 0 (should fail)
+        let result3 = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &100, &0);
+        assert_eq!(result3, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_config(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        // Attempt 4: cliff > duration (should fail)
+        let result4 = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &2000, &1000);
+        assert_eq!(result4, Err(Ok(VestingError::InvalidConfig)));
+        assert_eq!(
+            client.try_get_config(),
+            Err(Ok(VestingError::NotInitialized))
+        );
+
+        // Final attempt: valid parameters (should succeed)
+        let result5 = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
+        assert!(result5.is_ok());
+
+        // Verify config is properly stored after successful initialization
+        let config = client.get_config();
+        assert_eq!(config.token, token);
+        assert_eq!(config.beneficiary, beneficiary);
+        assert_eq!(config.admin, admin);
+        assert_eq!(config.total_amount, 1_000_000);
+        assert_eq!(config.cliff_seconds, 100);
+        assert_eq!(config.duration_seconds, 1000);
+        assert!(!config.cancelled);
+        assert!(!config.paused);
     }
 
     #[test]
@@ -1041,11 +1187,8 @@ mod tests {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &500, &1000);
-
-        // advance 100s — still before cliff of 500s
         env.ledger().with_mut(|l| l.timestamp += 100);
         client.cancel();
-
         let tc = soroban_sdk::token::Client::new(&env, &token_id);
         assert_eq!(tc.balance(&beneficiary), 0);
         assert_eq!(tc.balance(&admin), 1_000_000);
@@ -1056,15 +1199,10 @@ mod tests {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
         client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &100, &1000);
-
-        // advance 400s — past cliff, 40% vested
         env.ledger().with_mut(|l| l.timestamp += 400);
         client.claim();
         client.cancel();
-
         let tc = soroban_sdk::token::Client::new(&env, &token_id);
-        // 400/1000 * 1_000_000 = 400_000 vested → beneficiary
-        // remaining 600_000 → admin
         assert_eq!(tc.balance(&beneficiary), 400_000);
         assert_eq!(tc.balance(&admin), 600_000);
     }
@@ -1099,6 +1237,12 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_admin_same_admin_fails() {
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
+        let result = client.try_transfer_admin(&admin);
+        assert_eq!(result, Err(Ok(VestingError::SameAdmin)));
     fn test_transfer_admin_allows_new_admin_to_cancel_old_admin_cannot() {
         use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
         use soroban_sdk::IntoVal;
@@ -1108,7 +1252,7 @@ mod tests {
         client.initialize(&token_id, &beneficiary, &admin_a, &1_000_000, &100, &1000);
 
         let admin_b = Address::generate(&env);
-        client.transfer_admin(&admin_b).expect("transfer_admin should succeed");
+        client.transfer_admin(&admin_b);
 
         env.mock_auths(&[MockAuth {
             address: &admin_a,
@@ -1119,7 +1263,10 @@ mod tests {
                 sub_invokes: &[],
             },
         }]);
-        assert!(client.try_cancel().is_err(), "old admin should not be able to cancel after transfer");
+        assert!(
+            client.try_cancel().is_err(),
+            "old admin should not be able to cancel after transfer"
+        );
 
         env.mock_auths(&[MockAuth {
             address: &admin_b,
@@ -1130,10 +1277,43 @@ mod tests {
                 sub_invokes: &[],
             },
         }]);
-        client.cancel().expect("new admin should be able to cancel");
+        client.cancel();
 
         let tc = soroban_sdk::token::Client::new(&env, &token_id);
         assert_eq!(tc.balance(&beneficiary), 0);
+        assert_eq!(tc.balance(&admin_b), 1_000_000);
+    }
+
+    #[test]
+    fn test_transfer_admin_then_cancel_before_cliff_unvested_goes_to_new_admin() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let (env, contract_id, token_id, beneficiary, admin_a) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin_a, &1_000_000, &500, &1000);
+
+        let admin_b = Address::generate(&env);
+        client.transfer_admin(&admin_b);
+
+        // Advance to before cliff so nothing is vested yet
+        env.ledger().with_mut(|l| l.timestamp = 100);
+
+        env.mock_auths(&[MockAuth {
+            address: &admin_b,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "cancel",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.cancel();
+
+        let tc = soroban_sdk::token::Client::new(&env, &token_id);
+        assert_eq!(tc.balance(&beneficiary), 0);
+        assert_eq!(tc.balance(&admin_a), 0);
         assert_eq!(tc.balance(&admin_b), 1_000_000);
     }
 
@@ -1164,13 +1344,68 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ── Issue #80: Zero Cliff Period Tests ────────────────────────────────────
+
     #[test]
-    fn test_transfer_admin_to_same_admin_fails() {
+    fn test_zero_cliff_initialize_succeeds() {
         let (env, contract_id, token, beneficiary, admin) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
-        client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
-        let result = client.try_transfer_admin(&admin);
-        assert_eq!(result, Err(Ok(VestingError::SameAdmin)));
+        let result = client.try_initialize(&token, &beneficiary, &admin, &1_000_000, &0, &1000);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_zero_cliff_claim_succeeds_immediately() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+        let result = client.try_claim();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_zero_cliff_correct_vested_amount_at_halfway() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 500);
+        let status = client.get_status();
+        assert!(status.cliff_reached);
+        assert_eq!(status.vested, 500_000);
+        assert_eq!(status.claimable, 500_000);
+    }
+
+    #[test]
+    fn test_zero_cliff_fully_vested_after_duration() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 2000);
+        let status = client.get_status();
+        assert!(status.fully_vested);
+        assert_eq!(status.vested, 1_000_000);
+    }
+
+    #[test]
+    fn test_zero_cliff_claim_immediately_after_initialize() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        let result = client.try_claim();
+        assert_eq!(result, Err(Ok(VestingError::NothingToClaim)));
+    }
+
+    #[test]
+    fn test_zero_cliff_vesting_starts_immediately() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &0, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 1);
+        let status = client.get_status();
+        assert!(status.cliff_reached);
+        assert_eq!(status.vested, 1_000);
+        assert_eq!(status.claimable, 1_000);
     }
 
     #[test]
@@ -1187,7 +1422,14 @@ mod tests {
         let (env, contract_id, token, _, _) = setup();
         let client = ForgeVestingClient::new(&env, &contract_id);
         let same_address = Address::generate(&env);
-        let result = client.try_initialize(&token, &same_address, &same_address, &1_000_000, &100, &1000);
+        let result = client.try_initialize(
+            &token,
+            &same_address,
+            &same_address,
+            &1_000_000,
+            &100,
+            &1000,
+        );
         assert_eq!(result, Err(Ok(VestingError::BeneficiaryAsAdmin)));
     }
 
@@ -1281,9 +1523,9 @@ mod tests {
 
     #[test]
     fn test_change_beneficiary_cancelled_fails() {
-        let (env, contract_id, token, beneficiary, admin) = setup();
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
         let client = ForgeVestingClient::new(&env, &contract_id);
-        client.initialize(&token, &beneficiary, &admin, &1_000_000, &100, &1000);
+        client.initialize(&token_id, &beneficiary, &admin, &1_000_000, &100, &1000);
         client.cancel();
         let new_beneficiary = Address::generate(&env);
         let result = client.try_change_beneficiary(&new_beneficiary);
@@ -1353,8 +1595,7 @@ mod tests {
             .address();
         let beneficiary = Address::generate(&env);
         let admin = Address::generate(&env);
-        soroban_sdk::token::StellarAssetClient::new(&env, &token_id)
-            .mint(&contract_id, &1_000_000);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &1_000_000);
         (env, contract_id, token_id, beneficiary, admin)
     }
 
@@ -1363,8 +1604,7 @@ mod tests {
         // duration_seconds == cliff_seconds must be accepted (cliff <= duration)
         let (env, contract_id, token_id, beneficiary, admin) = setup_cliff_equals_duration();
         let client = ForgeVestingClient::new(&env, &contract_id);
-        let result =
-            client.try_initialize(&token_id, &beneficiary, &admin, &1_000_000, &500, &500);
+        let result = client.try_initialize(&token_id, &beneficiary, &admin, &1_000_000, &500, &500);
         assert!(result.is_ok());
     }
 
@@ -1434,20 +1674,27 @@ mod tests {
         let cliff_seconds = 100_u64;
         let duration_seconds = 1000_u64;
 
-        client.initialize(&token_id, &beneficiary, &admin, &total_amount, &cliff_seconds, &duration_seconds);
+        client.initialize(
+            &token_id,
+            &beneficiary,
+            &admin,
+            &total_amount,
+            &cliff_seconds,
+            &duration_seconds,
+        );
 
         // Track cumulative claimed amount
         let mut cumulative_claimed = 0_i128;
 
         // Test points: before cliff, at cliff, mid-vesting, fully vested
         let test_timestamps = [
-            50_u64,   // Before cliff
-            100,      // At cliff
-            300,      // 30% through vesting
-            550,      // 55% through vesting
-            800,      // 80% through vesting
-            1000,     // Fully vested
-            1500,     // Past vesting end
+            50_u64, // Before cliff
+            100,    // At cliff
+            300,    // 30% through vesting
+            550,    // 55% through vesting
+            800,    // 80% through vesting
+            1000,   // Fully vested
+            1500,   // Past vesting end
         ];
 
         for &timestamp in &test_timestamps {
@@ -1459,21 +1706,27 @@ mod tests {
             assert!(
                 status.claimed <= status.vested,
                 "Invariant violated at t={}: claimed ({}) > vested ({})",
-                timestamp, status.claimed, status.vested
+                timestamp,
+                status.claimed,
+                status.vested
             );
 
             // Core invariant 2: vested <= total_amount
             assert!(
                 status.vested <= status.total_amount,
                 "Invariant violated at t={}: vested ({}) > total_amount ({})",
-                timestamp, status.vested, status.total_amount
+                timestamp,
+                status.vested,
+                status.total_amount
             );
 
             // Core invariant 3: claimed <= total_amount
             assert!(
                 status.claimed <= status.total_amount,
                 "Invariant violated at t={}: claimed ({}) > total_amount ({})",
-                timestamp, status.claimed, status.total_amount
+                timestamp,
+                status.claimed,
+                status.total_amount
             );
 
             // Attempt to claim if past cliff
@@ -1482,7 +1735,11 @@ mod tests {
                 cumulative_claimed += claimed_now;
 
                 // Verify the claim amount is positive and reasonable
-                assert!(claimed_now > 0, "Claimed amount should be positive at t={}", timestamp);
+                assert!(
+                    claimed_now > 0,
+                    "Claimed amount should be positive at t={}",
+                    timestamp
+                );
                 assert!(
                     claimed_now <= status.claimable,
                     "Claimed more than claimable at t={}",
@@ -1496,13 +1753,17 @@ mod tests {
                 assert!(
                     status_after.claimed <= status_after.vested,
                     "Invariant violated after claim at t={}: claimed ({}) > vested ({})",
-                    timestamp, status_after.claimed, status_after.vested
+                    timestamp,
+                    status_after.claimed,
+                    status_after.vested
                 );
 
                 assert!(
                     status_after.vested <= status_after.total_amount,
                     "Invariant violated after claim at t={}: vested ({}) > total_amount ({})",
-                    timestamp, status_after.vested, status_after.total_amount
+                    timestamp,
+                    status_after.vested,
+                    status_after.total_amount
                 );
 
                 // Verify cumulative claimed matches status
@@ -1531,7 +1792,7 @@ mod tests {
     // ── Pause / Unpause Tests ─────────────────────────────────────────────────
 
     /// Test 1: Admin pauses at 50% vesting. Verify get_status shows amount frozen
-    /// and claim() fails with Paused.
+    /// and claim() fails with VestingError::Paused.
     #[test]
     fn test_pause_freezes_vested_amount_and_blocks_claim() {
         let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
@@ -1547,7 +1808,7 @@ mod tests {
         assert!(status.paused);
         assert_eq!(status.vested, 500_000); // frozen at 50%
 
-        // claim must fail
+        // claim must fail with Paused, not Unauthorized
         assert_eq!(client.try_claim(), Err(Ok(VestingError::Paused)));
     }
 
@@ -1588,12 +1849,56 @@ mod tests {
 
         let config = client.get_config();
         assert!(!config.paused);
-        assert_eq!(config.paused_at, 0);
+        assert_eq!(config.paused_at, None);
         // start_time shifted by 200s
         assert_eq!(config.start_time, original_start + 200);
         // effective end_time = new start_time + duration = original_start + 200 + 1000
         let expected_end = original_start + 200 + 1000;
         assert_eq!(config.start_time + config.duration_seconds, expected_end);
+    }
+
+    /// Verifies that paused time is excluded from vested amounts and claim().
+    ///
+    /// Timeline (cliff=0, duration=1000, total=10_000, start_time=0):
+    ///   t=0    initialize  → vested = 0
+    ///   t=200  pause       → vested = 10_000 * 200/1000 = 2_000 (frozen)
+    ///   t=400  unpause     → start_time shifts to 200 (paused 200s)
+    ///   t=600  check       → active elapsed = (600-200) = 400s
+    ///                        vested = 10_000 * 400/1000 = 4_000
+    ///   t=600  claim()     → returns 4_000
+    ///   t=1200 check       → active elapsed = (1200-200) = 1000s → fully vested
+    #[test]
+    fn test_unpause_paused_time_excluded_from_vested_amounts() {
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &10_000, &0, &1000);
+
+        // t=200: pause — 200s active → vested = 2_000
+        env.ledger().with_mut(|l| l.timestamp = 200);
+        client.pause();
+        assert_eq!(client.get_status().vested, 2_000);
+
+        // t=400: unpause — paused for 200s, start_time shifts to 200
+        env.ledger().with_mut(|l| l.timestamp = 400);
+        client.unpause();
+        assert_eq!(client.get_config().start_time, 200);
+
+        // t=600: 200s pre-pause + 200s post-resume = 400 active seconds
+        // vested = 10_000 * 400/1000 = 4_000
+        env.ledger().with_mut(|l| l.timestamp = 600);
+        let status = client.get_status();
+        assert_eq!(status.vested, 4_000, "vested at t=600 should be 4_000");
+        assert!(!status.fully_vested);
+
+        let claimed = client.claim();
+        assert_eq!(claimed, 4_000, "claim() at t=600 should return 4_000");
+
+        // t=1200: active elapsed = 1200 - 200 = 1000s → fully vested
+        env.ledger().with_mut(|l| l.timestamp = 1200);
+        let status = client.get_status();
+        assert!(status.fully_vested, "should be fully vested at t=1200");
+        assert_eq!(status.vested, 10_000);
     }
 
     /// Test 4: Non-admin cannot pause or unpause.
@@ -1835,8 +2140,7 @@ mod tests {
         assert_eq!(topic_sym, Symbol::new(&env, "claimed"));
 
         // Decode data as (Address, i128)
-        let (got_beneficiary, got_amount) =
-            <(Address, i128)>::try_from_val(&env, &data).unwrap();
+        let (got_beneficiary, got_amount) = <(Address, i128)>::try_from_val(&env, &data).unwrap();
         assert_eq!(got_beneficiary, beneficiary);
         assert_eq!(got_amount, claimed_amount);
     }
@@ -1947,8 +2251,14 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp += 600);
         let status = client.get_status();
 
-        assert_eq!(status.vested, 400_000, "vested should reflect amount at cancel time");
-        assert_eq!(status.claimable, 0, "claimable should be 0 after cancel pays out");
+        assert_eq!(
+            status.vested, 400_000,
+            "vested should reflect amount at cancel time"
+        );
+        assert_eq!(
+            status.claimable, 0,
+            "claimable should be 0 after cancel pays out"
+        );
     }
 
     /// Verifies transfer_admin() emits an "admin_transferred" event with the correct
@@ -1985,7 +2295,7 @@ mod tests {
     }
 
     /// Verifies that no "admin_transferred" event is emitted when transfer_admin() fails
-    /// (e.g. SameAdmin case).
+    /// (e.g., SameAdmin case).
     #[test]
     fn test_event_admin_transferred_not_emitted_on_failure() {
         use soroban_sdk::{testutils::Events, Symbol, TryFromVal};
@@ -2006,7 +2316,116 @@ mod tests {
                     .map(|s| s == Symbol::new(&env, "admin_transferred"))
                     .unwrap_or(false)
         });
-        assert!(!found, "admin_transferred event should not be emitted on failure");
+        assert!(
+            !found,
+            "admin_transferred event should not be emitted on failure"
+        );
     }
 
+    /// Verifies claimable amount at exactly cliff_seconds is (total * cliff) / duration.
+    /// Uses total=10_000, cliff=100, duration=1000 → expected 1_000.
+    #[test]
+    fn test_claimable_at_exactly_cliff_is_correct() {
+        const TOTAL: i128 = 10_000;
+        const CLIFF: u64 = 100;
+        const DURATION: u64 = 1000;
+
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &TOTAL, &CLIFF, &DURATION);
+
+        // t=100: 10_000 * 100 / 1000 = 1_000
+        env.ledger().with_mut(|l| l.timestamp = 100);
+        assert_eq!(client.get_status().claimable, 1_000);
+        assert_eq!(client.claim(), 1_000);
+    }
+
+    /// Verifies claimable amount at cliff_seconds+1 is (total * (cliff+1)) / duration.
+    /// Uses total=10_000, cliff=100, duration=1000 → expected 1_010.
+    #[test]
+    fn test_claimable_at_cliff_plus_one_is_correct() {
+        const TOTAL: i128 = 10_000;
+        const CLIFF: u64 = 100;
+        const DURATION: u64 = 1000;
+
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &TOTAL, &CLIFF, &DURATION);
+
+        // t=101: 10_000 * 101 / 1000 = 1_010
+        env.ledger().with_mut(|l| l.timestamp = 101);
+        assert_eq!(client.get_status().claimable, 1_010);
+        assert_eq!(client.claim(), 1_010);
+    }
+
+    /// Verifies claimable amount at duration_seconds-1 is (total * (duration-1)) / duration.
+    /// Uses total=10_000, cliff=100, duration=1000 → expected 9_990 (truncated).
+    #[test]
+    fn test_claimable_at_duration_minus_one_is_correct() {
+        const TOTAL: i128 = 10_000;
+        const CLIFF: u64 = 100;
+        const DURATION: u64 = 1000;
+
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &TOTAL, &CLIFF, &DURATION);
+
+        // t=999: 10_000 * 999 / 1000 = 9_990
+        env.ledger().with_mut(|l| l.timestamp = 999);
+        assert_eq!(client.get_status().claimable, 9_990);
+        assert_eq!(client.claim(), 9_990);
+    }
+
+    /// Verifies claimable amount at exactly duration_seconds equals total_amount.
+    /// Uses total=10_000, cliff=100, duration=1000 → expected 10_000.
+    #[test]
+    fn test_claimable_at_full_duration_is_total_amount() {
+        const TOTAL: i128 = 10_000;
+        const CLIFF: u64 = 100;
+        const DURATION: u64 = 1000;
+
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &TOTAL, &CLIFF, &DURATION);
+
+        // t=1000: fully vested → 10_000
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        assert_eq!(client.get_status().claimable, TOTAL);
+        assert_eq!(client.claim(), TOTAL);
+    }
+
+    /// Verifies that claiming at duration-1 then duration yields 9_990 + 10 = 10_000,
+    /// recovering the truncated remainder with no tokens lost.
+    #[test]
+    fn test_sequential_claim_duration_minus_one_then_duration_sums_to_total() {
+        const TOTAL: i128 = 10_000;
+        const CLIFF: u64 = 100;
+        const DURATION: u64 = 1000;
+
+        let (env, contract_id, token_id, beneficiary, admin) = setup_with_token();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.initialize(&token_id, &beneficiary, &admin, &TOTAL, &CLIFF, &DURATION);
+
+        // t=999: 10_000 * 999 / 1000 = 9_990
+        env.ledger().with_mut(|l| l.timestamp = 999);
+        let first = client.claim();
+        assert_eq!(first, 9_990);
+
+        // t=1000: fully vested, 10 remaining (truncated dust recovered)
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let second = client.claim();
+        assert_eq!(second, 10);
+
+        assert_eq!(first + second, TOTAL);
+    }
 }

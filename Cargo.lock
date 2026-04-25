@@ -466,14 +466,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
-name = "forge-benches"
+name = "forge-errors"
 version = "0.1.0"
 dependencies = [
- "forge-governor",
- "forge-multisig",
- "forge-oracle",
- "forge-stream",
- "forge-vesting",
  "soroban-sdk",
 ]
 
@@ -481,6 +476,7 @@ dependencies = [
 name = "forge-governor"
 version = "0.1.0"
 dependencies = [
+ "forge-errors",
  "soroban-sdk",
 ]
 
@@ -488,6 +484,7 @@ dependencies = [
 name = "forge-multisig"
 version = "0.1.0"
 dependencies = [
+ "forge-errors",
  "soroban-sdk",
 ]
 
@@ -495,6 +492,7 @@ dependencies = [
 name = "forge-oracle"
 version = "0.1.0"
 dependencies = [
+ "forge-errors",
  "soroban-sdk",
 ]
 
@@ -502,6 +500,7 @@ dependencies = [
 name = "forge-stream"
 version = "0.1.0"
 dependencies = [
+ "forge-errors",
  "soroban-sdk",
 ]
 
@@ -509,6 +508,15 @@ dependencies = [
 name = "forge-vesting"
 version = "0.1.0"
 dependencies = [
+ "forge-errors",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "forge-vesting-factory"
+version = "0.1.0"
+dependencies = [
+ "forge-errors",
  "soroban-sdk",
 ]
 
