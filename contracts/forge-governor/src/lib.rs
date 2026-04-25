@@ -299,17 +299,25 @@ impl GovernorContract {
         // Track active proposal ID for O(1) get_pending_proposals
         let mut active: Vec<u64> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ActiveProposals)
             .unwrap_or_else(|| Vec::new(&env));
         let index = active.len();
         active.push_back(proposal_id);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::ActiveProposals, &active);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::ActiveProposalIndex(proposal_id), &index);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveProposals, PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveProposalIndex(proposal_id),
+            PROPOSAL_TTL_EXTEND,
+            PROPOSAL_TTL_EXTEND,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "proposal_created"),),
@@ -891,7 +899,7 @@ impl GovernorContract {
     pub fn get_pending_proposals(env: Env) -> Vec<u64> {
         let active: Vec<u64> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ActiveProposals)
             .unwrap_or_else(|| Vec::new(&env));
 
@@ -916,17 +924,17 @@ impl GovernorContract {
 
     fn remove_active_proposal(env: &Env, proposal_id: u64) {
         let index_key = DataKey::ActiveProposalIndex(proposal_id);
-        let Some(index) = env.storage().instance().get::<DataKey, u32>(&index_key) else {
+        let Some(index) = env.storage().persistent().get::<DataKey, u32>(&index_key) else {
             return;
         };
 
         let mut active: Vec<u64> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&DataKey::ActiveProposals)
             .unwrap_or_else(|| Vec::new(env));
         if active.is_empty() {
-            env.storage().instance().remove(&index_key);
+            env.storage().persistent().remove(&index_key);
             return;
         }
 
@@ -935,15 +943,23 @@ impl GovernorContract {
             let last_id = active.get(last_index).unwrap();
             active.set(index, last_id);
             env.storage()
-                .instance()
+                .persistent()
                 .set(&DataKey::ActiveProposalIndex(last_id), &index);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveProposalIndex(last_id),
+                PROPOSAL_TTL_EXTEND,
+                PROPOSAL_TTL_EXTEND,
+            );
         }
 
         active.remove(last_index);
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::ActiveProposals, &active);
-        env.storage().instance().remove(&index_key);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveProposals, PROPOSAL_TTL_EXTEND, PROPOSAL_TTL_EXTEND);
+        env.storage().persistent().remove(&index_key);
     }
 }
 
