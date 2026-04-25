@@ -601,11 +601,6 @@ impl MultisigContract {
             return Err(MultisigError::TimelockNotElapsed);
         }
 
-        proposal.executed = true;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Proposal(proposal_id), &proposal);
-
         let token_client = token::Client::new(&env, &proposal.token);
 
         // Verify the treasury holds enough to cover all committed proposals.
