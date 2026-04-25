@@ -1442,6 +1442,32 @@ mod tests {
     }
 
     #[test]
+    fn test_get_claimable_resets_after_withdraw_and_only_counts_new_accrual() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ForgeStream);
+        let client = ForgeStreamClient::new(&env, &contract_id);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = setup_token(&env, &sender, 100 * 1000);
+
+        let stream_id = client.create_stream(&sender, &token, &recipient, &100, &1000);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+
+        assert_eq!(client.get_claimable(&stream_id), 10_000);
+
+        let withdrawn = client.withdraw(&stream_id);
+        assert_eq!(withdrawn, 10_000);
+        assert_eq!(client.get_claimable(&stream_id), 0);
+        assert_eq!(client.get_stream_status(&stream_id).withdrawable, 0);
+
+        env.ledger().with_mut(|l| l.timestamp += 50);
+
+        assert_eq!(client.get_claimable(&stream_id), 5_000);
+        assert_eq!(client.get_stream_status(&stream_id).withdrawable, 5_000);
+    }
+
+    #[test]
     fn test_get_claimable_cancelled_stream_returns_zero() {
         let env = Env::default();
         env.mock_all_auths();
