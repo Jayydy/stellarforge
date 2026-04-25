@@ -1,7 +1,6 @@
 #![no_std]
 
 //! # forge-oracle
-//!
 //! Standardized price feed interface for Stellar/Soroban contracts.
 //!
 //! ## Features

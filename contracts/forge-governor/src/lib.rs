@@ -1,9 +1,7 @@
 #![no_std]
 
 //! # forge-governor
-//!
 //! On-chain governance with token-weighted voting for Stellar/Soroban.
-//!
 //! ## Features
 //! - Token-weighted proposal voting (1 token = 1 vote)
 //! - Configurable voting period and quorum
@@ -60,7 +58,6 @@ pub struct GovernorConfig {
     /// Address authorized to initialize the contract (must call initialize()).
     pub admin: Address,
     /// Token used for voting weight.
-    ///
     /// Must be a valid Soroban token contract address that implements the token interface.
     /// This address is used in `vote()` to verify voter balances (1 token = 1 vote).
     /// Passing an invalid or non-token address will not be caught at initialization time —

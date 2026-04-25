@@ -1,9 +1,7 @@
 #![no_std]
 
 //! # forge-multisig
-//!
 //! An N-of-M multisig treasury contract for Stellar/Soroban.
-//!
 //! ## Features
 //! - N-of-M signature threshold for transaction approval
 //! - Timelock delay before execution after approval
@@ -116,7 +114,6 @@ impl MultisigContract {
     /// # Errors
     /// - [`MultisigError::AlreadyInitialized`] — Contract has already been initialized.
     /// - [`MultisigError::InvalidThreshold`] — `threshold` is 0 or exceeds the number of unique owners.
-    ///
     /// # Example
     /// ```text
     /// // 2-of-3 multisig with a 3600 s (1 h) timelock
@@ -688,7 +685,6 @@ impl MultisigContract {
     /// - [`MultisigError::AlreadyExecuted`] — The proposal has already been executed.
     /// - [`MultisigError::AlreadyCancelled`] — The proposal has already been cancelled.
     /// - [`MultisigError::CannotCancel`] — The proposal can still reach the approval threshold.
-    ///
     /// # Example
     /// ```text
     /// // Cancel a proposal that can no longer reach threshold
