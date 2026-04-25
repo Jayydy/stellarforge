@@ -114,13 +114,13 @@ impl ForgeVestingFactory {
             return Err(FactoryError::Common(CommonError::InvalidConfig));
         }
 
-        let id: u64 = env
+        let schedule_id: u64 = env
             .storage()
             .persistent()
             .get(&DataKey::ScheduleCount)
             .unwrap_or(0);
 
-        let config = ScheduleConfig {
+        let schedule_config = ScheduleConfig {
             token: token.clone(),
             beneficiary,
             admin,
@@ -133,15 +133,17 @@ impl ForgeVestingFactory {
 
         // Pull tokens from admin into the contract
         token::Client::new(&env, &token).transfer(
-            &config.admin,
+            &schedule_config.admin,
             &env.current_contract_address(),
             &total_amount,
         );
 
         env.storage()
             .persistent()
-            .set(&DataKey::Schedule(id), &config);
+            .set(&DataKey::Schedule(schedule_id), &schedule_config);
         env.storage()
+            .instance()
+            .set(&DataKey::ScheduleCount, &(schedule_id + 1));
             .persistent()
             .extend_ttl(&DataKey::Schedule(id), 17280, 34560);
         env.storage()
@@ -152,9 +154,9 @@ impl ForgeVestingFactory {
             .extend_ttl(&DataKey::ScheduleCount, 17280, 34560);
 
         env.events()
-            .publish((Symbol::new(&env, "schedule_created"),), (id, total_amount));
+            .publish((Symbol::new(&env, "schedule_created"),), (schedule_id, total_amount));
 
-        Ok(id)
+        Ok(schedule_id)
     }
 
     /// Claim all currently vested and unclaimed tokens for a schedule.
@@ -173,28 +175,28 @@ impl ForgeVestingFactory {
     /// - [`FactoryError::CliffNotReached`]
     /// - [`FactoryError::NothingToClaim`]
     pub fn claim(env: Env, schedule_id: u64) -> Result<i128, FactoryError> {
-        let config: ScheduleConfig = env
+        let schedule_config: ScheduleConfig = env
             .storage()
             .persistent()
             .get(&DataKey::Schedule(schedule_id))
             .ok_or(FactoryError::ScheduleNotFound)?;
 
-        config.beneficiary.require_auth();
+        schedule_config.beneficiary.require_auth();
 
-        if config.cancelled {
+        if schedule_config.cancelled {
             return Err(FactoryError::Cancelled);
         }
 
-        let now = env.ledger().timestamp();
-        let vested = Self::compute_vested(&config, now);
+        let current_time = env.ledger().timestamp();
+        let vested = Self::compute_vested(&schedule_config, current_time);
         let claimed: i128 = env
             .storage()
             .persistent()
             .get(&DataKey::Claimed(schedule_id))
             .unwrap_or(0);
 
-        let elapsed = now.saturating_sub(config.start_time);
-        if elapsed < config.cliff_seconds {
+        let elapsed = current_time.saturating_sub(schedule_config.start_time);
+        if elapsed < schedule_config.cliff_seconds {
             return Err(FactoryError::CliffNotReached);
         }
 
@@ -213,9 +215,9 @@ impl ForgeVestingFactory {
             .persistent()
             .extend_ttl(&DataKey::Claimed(schedule_id), 17280, 34560);
 
-        token::Client::new(&env, &config.token).transfer(
+        token::Client::new(&env, &schedule_config.token).transfer(
             &env.current_contract_address(),
-            &config.beneficiary,
+            &schedule_config.beneficiary,
             &claimable,
         );
 
@@ -237,18 +239,20 @@ impl ForgeVestingFactory {
     /// - [`FactoryError::Cancelled`]
     /// - [`FactoryError::Unauthorized`]
     pub fn cancel(env: Env, schedule_id: u64) -> Result<(), FactoryError> {
-        let mut config: ScheduleConfig = env
+        let mut schedule_config: ScheduleConfig = env
             .storage()
             .persistent()
             .get(&DataKey::Schedule(schedule_id))
             .ok_or(FactoryError::ScheduleNotFound)?;
 
-        config.admin.require_auth();
+        schedule_config.admin.require_auth();
 
-        if config.cancelled {
+        if schedule_config.cancelled {
             return Err(FactoryError::Cancelled);
         }
 
+        let current_time = env.ledger().timestamp();
+        let vested = Self::compute_vested(&schedule_config, current_time);
         let now = env.ledger().timestamp();
         let elapsed = now.saturating_sub(config.start_time);
         if elapsed >= config.duration_seconds {
@@ -262,6 +266,7 @@ impl ForgeVestingFactory {
             .get(&DataKey::Claimed(schedule_id))
             .unwrap_or(0);
 
+        let token_client = token::Client::new(&env, &schedule_config.token);
         let beneficiary_amount = (vested - claimed).max(0);
         let admin_amount = (config.total_amount - vested).max(0);
 
@@ -281,25 +286,27 @@ impl ForgeVestingFactory {
 
         // Send unclaimed vested tokens to beneficiary
         if beneficiary_amount > 0 {
-            token.transfer(
+            token_client.transfer(
                 &env.current_contract_address(),
-                &config.beneficiary,
+                &schedule_config.beneficiary,
                 &beneficiary_amount,
             );
         }
 
         // Return unvested tokens to admin
+        let admin_amount = (schedule_config.total_amount - vested).max(0);
         if admin_amount > 0 {
-            token.transfer(
+            token_client.transfer(
                 &env.current_contract_address(),
-                &config.admin,
+                &schedule_config.admin,
                 &admin_amount,
             );
         }
 
-        config.cancelled = true;
+        schedule_config.cancelled = true;
         env.storage()
             .persistent()
+            .set(&DataKey::Schedule(schedule_id), &schedule_config);
             .set(&DataKey::Schedule(schedule_id), &config);
         env.storage()
             .persistent()
@@ -333,12 +340,14 @@ impl ForgeVestingFactory {
     /// # Errors
     /// - [`FactoryError::ScheduleNotFound`]
     pub fn get_status(env: Env, schedule_id: u64) -> Result<VestingStatus, FactoryError> {
-        let config: ScheduleConfig = env
+        let schedule_config: ScheduleConfig = env
             .storage()
             .persistent()
             .get(&DataKey::Schedule(schedule_id))
             .ok_or(FactoryError::ScheduleNotFound)?;
 
+        let current_time = env.ledger().timestamp();
+        let vested = Self::compute_vested(&schedule_config, current_time);
         let now = env.ledger().timestamp();
         let vested = if config.cancelled {
             env.storage()
@@ -354,6 +363,8 @@ impl ForgeVestingFactory {
             .get(&DataKey::Claimed(schedule_id))
             .unwrap_or(0);
 
+        let elapsed = current_time.saturating_sub(schedule_config.start_time);
+        let claimable = if elapsed >= schedule_config.cliff_seconds {
         let elapsed = now.saturating_sub(config.start_time);
         let claimable = if !config.cancelled && elapsed >= config.cliff_seconds {
             (vested - claimed).max(0)
@@ -363,13 +374,13 @@ impl ForgeVestingFactory {
 
         Ok(VestingStatus {
             schedule_id,
-            total_amount: config.total_amount,
+            total_amount: schedule_config.total_amount,
             claimed,
             vested,
             claimable,
-            cliff_reached: elapsed >= config.cliff_seconds,
-            fully_vested: vested >= config.total_amount,
-            cancelled: config.cancelled,
+            cliff_reached: elapsed >= schedule_config.cliff_seconds,
+            fully_vested: vested >= schedule_config.total_amount,
+            cancelled: schedule_config.cancelled,
         })
     }
 
@@ -383,6 +394,11 @@ impl ForgeVestingFactory {
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
+    /// Compute the amount vested for a schedule at `now`.
+    ///
+    /// Returns `0` before the cliff or when the schedule has been cancelled,
+    /// returns the full amount once duration is reached, and otherwise performs
+    /// linear vesting based on elapsed time.
     fn compute_vested(config: &ScheduleConfig, now: u64) -> i128 {
         let elapsed = now.saturating_sub(config.start_time);
         if elapsed < config.cliff_seconds {
@@ -408,6 +424,7 @@ mod tests {
         Address, Env,
     };
 
+    /// Create a test token and mint `amount` to `admin`.
     fn setup_token(env: &Env, admin: &Address, amount: i128) -> Address {
         let token_admin = Address::generate(env);
         let token = env
@@ -417,6 +434,7 @@ mod tests {
         token
     }
 
+    /// Register and return a client for a fresh vesting factory contract.
     fn make_client(env: &Env) -> ForgeVestingFactoryClient {
         let id = env.register_contract(None, ForgeVestingFactory);
         ForgeVestingFactoryClient::new(env, &id)
