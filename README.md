@@ -600,7 +600,7 @@ A: Start by reading the [CONTRIBUTING.md](CONTRIBUTING.md) guide, then look for 
 **Q: What programming language and framework does StellarForge use?**
 A: StellarForge contracts are written in Rust using the Soroban SDK, which is Stellar's smart contract platform. All contracts compile to WebAssembly (WASM) for deployment on the Stellar network.
 
-**Q: How can I test my changes before submitting a pull request?**
+**Q: How can I test my changes before submitting a pull request for review?**
 A: Run `make test` to execute all tests across the workspace, or `cargo test -p <contract-name>` to test a specific contract. Use `make check` to run formatting, linting, and tests in sequence. For deployment testing, use the Stellar testnet as described in the [Testnet Deployment](#-testnet-deployment) section.
 
 **Q: What are the audit status and security considerations for these contracts?**

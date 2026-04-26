@@ -33,6 +33,6 @@ Add any other context, mockups, or examples about the feature request here.
 
 ## 🤝 Contribution
 Are you willing to help implement this feature?
-- [ ] Yes, I can submit a pull request
-- [ ] Yes, I can help with testing
-- [ ] No, I'd prefer the maintainers to handle it
+- [ ] Yes, I will implement this feature and submit a pull request
+- [ ] Yes, I can help with testing and code review
+- [ ] No, I'd prefer the maintainers to implement this feature
