@@ -10,6 +10,7 @@ resolver = "2"
 members = [
     "crates/forge-errors",
     "crates/forge-constants",
+    "crates/stellarforge-cli",
     "contracts/forge-vesting",
     "contracts/forge-vesting-factory",
     "contracts/forge-stream",

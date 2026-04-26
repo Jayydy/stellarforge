@@ -37,3 +37,13 @@ clean:
 .PHONY: bench
 bench:
 	cargo run -p forge-benches
+
+# Build the StellarForge CLI
+.PHONY: cli
+cli:
+	cargo build -p stellarforge-cli
+
+# Install the StellarForge CLI
+.PHONY: install-cli
+install-cli:
+	cargo install -p stellarforge-cli --path crates/stellarforge-cli
