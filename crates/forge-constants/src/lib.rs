@@ -131,3 +131,6 @@ pub mod test {
     pub const MEDIUM_CLIFF: u64 = 500;
     pub const LONG_CLIFF: u64 = 1_000;
 }
+
+#[cfg(test)]
+mod test;
