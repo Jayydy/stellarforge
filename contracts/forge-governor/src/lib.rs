@@ -11,7 +11,7 @@
 use forge_constants::{error_codes, ttl};
 use forge_errors::CommonError;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec, log,
 };
 
 // ── TTL constants ─────────────────────────────────────────────────────────────
@@ -249,6 +249,8 @@ impl GovernorContract {
     ) -> Result<u64, GovernorError> {
         proposer.require_auth();
 
+        log!(&env, "creating governance proposal");
+
         let config: GovernorConfig = env
             .storage()
             .instance()
@@ -370,6 +372,8 @@ impl GovernorContract {
     ) -> Result<(), GovernorError> {
         voter.require_auth();
 
+        log!(&env, "voting on proposal: {}", proposal_id);
+
         let config: GovernorConfig = env
             .storage()
             .instance()
@@ -391,6 +395,8 @@ impl GovernorContract {
         if env.storage().persistent().has(&vote_key) {
             return Err(GovernorError::AlreadyVoted);
         }
+
+        log!(&env, "executing proposal: {}", proposal_id);
 
         let mut proposal: Proposal = env
             .storage()

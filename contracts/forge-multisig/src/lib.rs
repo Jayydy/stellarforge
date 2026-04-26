@@ -11,7 +11,7 @@
 use forge_constants::{error_codes, ttl};
 use forge_errors::CommonError;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec, log,
 };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -192,6 +192,8 @@ impl MultisigContract {
         if amount <= 0 {
             return Err(MultisigError::Common(CommonError::InvalidAmount));
         }
+
+        log!(&env, "proposing transfer amount: {}", amount);
 
         let proposal_id: u64 = env
             .storage()
@@ -408,6 +410,8 @@ impl MultisigContract {
         owner.require_auth();
         Self::require_owner(&env, &owner)?;
 
+        log!(&env, "approving proposal: {}", proposal_id);
+
         let mut proposal: Proposal = env
             .storage()
             .persistent()
@@ -509,6 +513,8 @@ impl MultisigContract {
     pub fn reject(env: Env, owner: Address, proposal_id: u64) -> Result<(), MultisigError> {
         owner.require_auth();
         Self::require_owner(&env, &owner)?;
+
+        log!(&env, "executing proposal: {}", proposal_id);
 
         let mut proposal: Proposal = env
             .storage()
