@@ -1858,6 +1858,48 @@ mod tests {
 
     // ── Pause / Unpause Tests ─────────────────────────────────────────────────
 
+    /// Regression test for issues #223 and #224: pause() when already paused must
+    /// return VestingError::Paused (not Unauthorized), and unpause() when not paused
+    /// must return VestingError::NotPaused (not NotInitialized).
+    ///
+    /// These tests FAIL before issues #223 and #224 are fixed and PASS after.
+    ///
+    /// Steps:
+    ///   1. pause() once — assert Ok.
+    ///   2. pause() again — assert Err(VestingError::Paused), NOT Unauthorized.
+    ///   3. unpause() — assert Ok.
+    ///   4. unpause() again — assert Err(VestingError::NotPaused), NOT NotInitialized.
+    #[test]
+    fn test_pause_already_paused_returns_paused_not_unauthorized() {
+        // Issue #223: double-pause must return Paused, not Unauthorized
+        // Issue #224: double-unpause must return NotPaused, not NotInitialized
+        let (env, contract_id, token, beneficiary, admin) = setup();
+        let client = ForgeVestingClient::new(&env, &contract_id);
+        client.initialize(&token, &beneficiary, &admin, &1_000_000, &0, &1000);
+
+        // Step 1: first pause succeeds
+        assert!(client.try_pause().is_ok());
+
+        // Step 2: second pause must return Paused, not Unauthorized
+        let result = client.try_pause();
+        assert_eq!(
+            result,
+            Err(Ok(VestingError::Paused)),
+            "double-pause must return VestingError::Paused, not Unauthorized"
+        );
+
+        // Step 3: unpause succeeds
+        assert!(client.try_unpause().is_ok());
+
+        // Step 4: second unpause must return NotPaused, not NotInitialized
+        let result = client.try_unpause();
+        assert_eq!(
+            result,
+            Err(Ok(VestingError::NotPaused)),
+            "double-unpause must return VestingError::NotPaused, not NotInitialized"
+        );
+    }
+
     /// Test 1: Admin pauses at 50% vesting. Verify get_status shows amount frozen
     /// and claim() fails with VestingError::Paused.
     #[test]
