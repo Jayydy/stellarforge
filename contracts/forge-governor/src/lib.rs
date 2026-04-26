@@ -2439,6 +2439,54 @@ mod tests {
         );
     }
 
+    /// Regression test for issue #438: cancel_proposal() must reject callers who are
+    /// not the original proposer with Unauthorized, leaving the proposal Active and
+    /// still visible in get_pending_proposals().
+    ///
+    /// Steps:
+    ///   1. proposer_a creates a proposal — state is Active.
+    ///   2. attacker calls cancel_proposal() — assert Unauthorized.
+    ///   3. Proposal state is still Active.
+    ///   4. get_pending_proposals() still contains the proposal ID.
+    ///   5. proposer_a calls cancel_proposal() — assert success.
+    ///   6. State is Cancelled and proposal is removed from pending list.
+    #[test]
+    fn test_cancel_proposal_non_proposer_unauthorized_regression() {
+        // Issue #438: only the original proposer may cancel their proposal
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 1000);
+        let client = setup(&env);
+
+        let proposer_a = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        let pid = client.propose(
+            &proposer_a,
+            &String::from_str(&env, "Proposal A"),
+            &String::from_str(&env, "desc"),
+        );
+
+        // Step 2: attacker cannot cancel
+        let result = client.try_cancel_proposal(&attacker, &pid);
+        assert_eq!(result, Err(Ok(GovernorError::Unauthorized)));
+
+        // Step 3: proposal is still Active
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Active);
+
+        // Step 4: still in pending list
+        let pending = client.get_pending_proposals();
+        assert!(pending.contains(pid), "proposal must still be in pending list");
+
+        // Step 5: proposer_a cancels successfully
+        client.cancel_proposal(&proposer_a, &pid);
+
+        // Step 6: state is Cancelled and removed from pending
+        assert_eq!(client.get_proposal_state(&pid), ProposalState::Cancelled);
+        let pending_after = client.get_pending_proposals();
+        assert!(!pending_after.contains(pid), "cancelled proposal must not appear in pending list");
+    }
+
     /// Test successful cancel: proposer can cancel an active proposal before voting ends
     #[test]
     fn test_cancel_proposal_successful() {

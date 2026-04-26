@@ -2719,6 +2719,53 @@ mod tests {
 
     // ── Issue #336: cancel() by non-proposer boundary — unreachable threshold ──
 
+    /// Regression test for issue #225: execute() must not transfer tokens twice.
+    ///
+    /// Before the fix, execute() wrote `proposal.executed = true` AFTER the transfer,
+    /// but a second call could race through the guard if the first call's storage write
+    /// was not yet visible. The fix ensures the guard is checked before any transfer and
+    /// that a second call returns AlreadyExecuted without moving any tokens.
+    ///
+    /// Steps:
+    ///   1. Fund a 2-of-3 multisig with exactly TRANSFER_AMOUNT tokens.
+    ///   2. Propose, approve to threshold, advance past timelock.
+    ///   3. First execute() — assert Ok, proposal.executed == true.
+    ///   4. Second execute() — assert AlreadyExecuted.
+    ///   5. Recipient balance increased by exactly TRANSFER_AMOUNT (not 2×).
+    #[test]
+    fn test_execute_double_executed_bug_regression() {
+        // Issue #225: double executed=true write regression guard
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        const TRANSFER_AMOUNT: i128 = 300;
+        let (client, [o1, o2, o3], token_id, recipient, _) = setup_funded(&env, 3600);
+
+        let token = soroban_sdk::token::Client::new(&env, &token_id);
+        let initial_recipient_balance = token.balance(&recipient);
+
+        let pid = client.propose(&o1, &recipient, &token_id, &TRANSFER_AMOUNT);
+        client.approve(&o2, &pid);
+
+        env.ledger().with_mut(|l| l.timestamp = 3601);
+
+        // First execute must succeed
+        client.execute(&o3, &pid);
+        assert!(client.get_proposal(&pid).unwrap().executed);
+
+        // Second execute must return AlreadyExecuted
+        let result = client.try_execute(&o3, &pid);
+        assert_eq!(result, Err(Ok(MultisigError::AlreadyExecuted)));
+
+        // Recipient received tokens exactly once
+        assert_eq!(
+            token.balance(&recipient),
+            initial_recipient_balance + TRANSFER_AMOUNT,
+            "recipient balance must increase by exactly TRANSFER_AMOUNT, not twice"
+        );
+    }
+
     /// 3-of-5 multisig: verifies the exact boundary where cancel() by a non-proposer
     /// is blocked (remaining_possible == threshold) vs allowed (remaining_possible < threshold).
     ///
