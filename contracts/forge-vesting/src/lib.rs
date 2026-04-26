@@ -705,6 +705,36 @@ impl ForgeVesting {
         env.storage().instance().get(&DataKey::Claimed).unwrap_or(0)
     }
 
+    /// Compute the total amount of tokens vested up to a given timestamp.
+    ///
+    /// This function implements linear vesting with an optional cliff period.
+    ///
+    /// # Vesting Logic
+    ///
+    /// 1. **Cancelled vesting**: Returns 0 (no further vesting after cancellation)
+    /// 2. **Before cliff**: Returns 0 (no tokens vest until cliff is reached)
+    /// 3. **After cliff, before duration**: Linear vesting proportional to elapsed time
+    /// 4. **After duration**: Returns full total_amount (100% vested)
+    ///
+    /// # Linear Vesting Formula
+    ///
+    /// ```text
+    /// vested = total_amount × (elapsed - cliff) / (duration - cliff)
+    /// ```
+    ///
+    /// This ensures:
+    /// - At cliff time: vested = 0
+    /// - At duration time: vested = total_amount
+    /// - Between: proportional linear increase
+    ///
+    /// # Pause Handling
+    ///
+    /// If the vesting is paused, we use `paused_at` as the effective current time
+    /// instead of `now`. This freezes vesting progress until resumed.
+    ///
+    /// # Returns
+    ///
+    /// The total amount of tokens that have vested (not necessarily claimed) up to `now`.
     fn compute_vested(config: &VestingConfig, now: u64) -> i128 {
         if config.cancelled {
             return 0;

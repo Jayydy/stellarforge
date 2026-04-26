@@ -753,8 +753,16 @@ impl MultisigContract {
             .ok_or(MultisigError::NotInitialized)?;
         let total_owners = owners.len();
 
-        // Calculate remaining possible approvals
-        // remaining_possible = total_owners - rejection_count - approval_count
+        // Calculate remaining possible approvals to determine if proposal can still pass.
+        // This prevents wasting gas on proposals that mathematically cannot reach threshold.
+        //
+        // Formula: remaining_possible = total_owners - rejection_count - approval_count
+        //
+        // Example (2-of-3 multisig):
+        // - If 2 owners reject, remaining_possible = 3 - 2 - 0 = 1
+        // - Since 1 < threshold (2), the proposal can never pass
+        //
+        // We use saturating_sub to prevent underflow if counts somehow exceed total_owners.
         let remaining_possible = total_owners
             .saturating_sub(proposal.rejection_count)
             .saturating_sub(proposal.approval_count);

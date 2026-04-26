@@ -399,6 +399,31 @@ impl ForgeVestingFactory {
     /// Returns `0` before the cliff or when the schedule has been cancelled,
     /// returns the full amount once duration is reached, and otherwise performs
     /// linear vesting based on elapsed time.
+    /// Compute the total amount of tokens vested for a schedule up to a given timestamp.
+    ///
+    /// This function implements linear vesting with an optional cliff period,
+    /// identical to the logic in forge-vesting but operating on ScheduleConfig.
+    ///
+    /// # Vesting Logic
+    ///
+    /// 1. **Before cliff**: Returns 0 (no tokens vest until cliff is reached)
+    /// 2. **After cliff, before duration**: Linear vesting proportional to elapsed time
+    /// 3. **After duration**: Returns full total_amount (100% vested)
+    ///
+    /// # Linear Vesting Formula
+    ///
+    /// ```text
+    /// vested = total_amount × (elapsed - cliff) / (duration - cliff)
+    /// ```
+    ///
+    /// This ensures:
+    /// - At cliff time: vested = 0
+    /// - At duration time: vested = total_amount
+    /// - Between: proportional linear increase
+    ///
+    /// # Returns
+    ///
+    /// The total amount of tokens that have vested (not necessarily claimed) up to `now`.
     fn compute_vested(config: &ScheduleConfig, now: u64) -> i128 {
         let elapsed = now.saturating_sub(config.start_time);
         if elapsed < config.cliff_seconds {

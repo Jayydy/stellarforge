@@ -933,6 +933,20 @@ impl GovernorContract {
             return;
         }
 
+        // Efficient O(1) removal from active proposals list using swap-and-pop technique.
+        //
+        // Instead of shifting all elements after the removed item (O(n)), we:
+        // 1. Swap the item to remove with the last item in the list
+        // 2. Pop the last item
+        //
+        // This maintains O(1) removal at the cost of not preserving order,
+        // which is acceptable since proposal IDs are unique identifiers.
+        //
+        // Example: Remove proposal 5 from [3, 5, 7, 9]
+        // 1. Swap 5 with 9: [3, 9, 7, 5]
+        // 2. Pop last: [3, 9, 7]
+        //
+        // We use saturating_sub to safely handle the edge case of an empty list.
         let last_index = active.len().saturating_sub(1);
         if index != last_index {
             let last_id = active.get(last_index).unwrap();
