@@ -10,10 +10,10 @@ A clear and concise description of what the bug is.
 
 ## 🔍 Steps to Reproduce
 Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+1. Navigate to '...' (specify the page/section)
+2. Click on '....' (specify the exact button text, e.g., "Submit Transaction", "Connect Wallet", "Deploy Contract")
+3. Scroll down to '....' (specify the section if applicable)
+4. Observe the error behavior
 
 ## ✅ Expected Behavior
 A clear and concise description of what you expected to happen.

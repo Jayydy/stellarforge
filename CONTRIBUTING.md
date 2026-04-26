@@ -4,25 +4,11 @@ Thank you for your interest in contributing to StellarForge! This document provi
 
 ## 🚀 Quick Start
 
-1. **Fork the repository** on GitHub
-2. **Clone your fork**: `git clone https://github.com/YOUR-USERNAME/stellarforge.git`
-3. **Create a feature branch**: `git checkout -b feature/your-feature-name`
-4. **Make your changes**
-5. **Run tests**: `make test` or `cargo test --workspace`
-6. **Commit your changes**: `git commit -m "Description of changes"`
-7. **Push to your fork**: `git push origin feature/your-feature-name`
-8. **Submit a pull request** from your fork to the main repository
-
-## 🌿 Branch Naming Convention
-
-Use descriptive branch names that follow this pattern:
-
-- `feat/description` - New features (e.g., `feat/add-pause-functionality`)
-- `fix/description` - Bug fixes (e.g., `fix/vesting-calculation-bug`)
-- `docs/description` - Documentation updates (e.g., `docs/update-readme`)
-- `refactor/description` - Code refactoring (e.g., `refactor/simplify-error-handling`)
-- `test/description` - Test additions or updates (e.g., `test/add-multisig-tests`)
-- `chore/description` - Maintenance tasks (e.g., `chore/update-dependencies`)
+1. **Fork the repository**
+2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
+3. **Make your changes**
+4. **Run tests**: `make test` or `cargo test --workspace`
+5. **Create Pull Request for Code Review**
 
 ## 📦 Shared Error Crate (forge-errors)
 
@@ -148,7 +134,7 @@ We welcome feature requests! Please:
 
 ## 📄 Pull Request Process
 
-### Before Submitting
+### Before Creating Pull Request
 
 - [ ] Tests pass: `make test`
 - [ ] Code formatted: `make fmt` or `cargo fmt --all`
