@@ -60,3 +60,6 @@ pub enum CommonError {
     /// permissions to execute the requested operation.
     Unauthorized = 3,
 }
+
+#[cfg(test)]
+mod test;
