@@ -530,6 +530,9 @@ pub enum ContractError {
 
 ## �📜 Contract Details
 
+### forge-vesting-factory
+Manage multiple independent vesting schedules in a single deployment. Ideal for batch employee or advisor token grants without per-beneficiary contract deployments. See [`contracts/forge-vesting-factory/README.md`](contracts/forge-vesting-factory/README.md) for full details.
+
 ### forge-vesting
 Deploy tokens on a vesting schedule with an optional cliff period. Perfect for team allocations or advisor tokens.
 
