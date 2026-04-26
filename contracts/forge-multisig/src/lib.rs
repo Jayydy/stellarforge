@@ -1,20 +1,21 @@
 #![no_std]
+const INSTANCE_TTL_THRESHOLD: u32 = 17280;
+const INSTANCE_TTL_EXTEND: u32 = 103680;
 
-//! # forge-multisig
-//! An N-of-M multisig treasury contract for Stellar/Soroban.
-//! ## Features
-//! - N-of-M signature threshold for transaction approval
-//! - Timelock delay before execution after approval
-//! - Owners can propose, approve, reject, and execute transactions
-//! - Native token support via Stellar token interface
+// # forge-multisig
+// An N-of-M multisig treasury contract for Stellar/Soroban.
+// ## Features
+// - N-of-M signature threshold for transaction approval
+// - Timelock delay before execution after approval
+// - Owners can propose, approve, reject, and execute transactions
+// - Native token support via Stellar token interface
 
-use forge_constants::{error_codes, ttl};
-use forge_errors::CommonError;
+use forge_constants::ttl;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec, log,
 };
 
-// ── Storage keys ──────────────────────────────────────────────────────────────
+// â”€â”€ Storage keys â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[contracttype]
 pub enum DataKey {
@@ -23,7 +24,7 @@ pub enum DataKey {
     TimelockDelay,
     Proposal(u64),
     NextProposalId,
-    /// Boolean flag per address — `true` means the address is an owner.
+    /// Boolean flag per address â€” `true` means the address is an owner.
     /// Enables O(1) ownership checks without scanning the full owner Vec.
     IsOwner(Address),
     /// Boolean flag for whether an address has approved a proposal.
@@ -34,7 +35,7 @@ pub enum DataKey {
     CommittedAmount(Address),
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// A pending treasury transaction proposal.
 #[contracttype]
@@ -65,23 +66,30 @@ pub struct Proposal {
     pub is_native: bool,
 }
 
-// ── Errors ────────────────────────────────────────────────────────────────────
+// â”€â”€ Errors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[contracterror]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum MultisigError {
-    #[from(CommonError)]
-    Common(CommonError),
-    ProposalNotFound = error_codes::multisig::PROPOSAL_NOT_FOUND,
-    Unauthorized = error_codes::multisig::UNAUTHORIZED,
-    AlreadyExecuted = error_codes::multisig::ALREADY_EXECUTED,
-    TimedOut = error_codes::multisig::TIMED_OUT,
-    AlreadyApproved = error_codes::multisig::ALREADY_APPROVED,
-    InsufficientApprovals = error_codes::multisig::INSUFFICIENT_APPROVALS,
-    InvalidThreshold = error_codes::multisig::INVALID_THRESHOLD,
+    Common = 1,
+    Unauthorized = 2,
+    NotInitialized = 3,
+    AlreadyInitialized = 4,
+    ProposalNotFound = 5,
+    AlreadyExecuted = 6,
+    AlreadyCancelled = 7,
+    AlreadyVoted = 8,
+    InsufficientApprovals = 9,
+    TimelockNotElapsed = 10,
+    InvalidThreshold = 11,
+    InvalidAmount = 12,
+    InsufficientFunds = 13,
+    AlreadyApproved = 14,
+    CannotCancel = 15,
 }
 
-// ── Contract ──────────────────────────────────────────────────────────────────
+// â”€â”€ Contract â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[contract]
 pub struct MultisigContract;
@@ -91,25 +99,25 @@ impl MultisigContract {
     /// Initialize the multisig treasury.
     ///
     /// Stores the owner list, approval threshold, and timelock delay. Must be
-    /// called exactly once before any other function. Does not require auth —
+    /// called exactly once before any other function. Does not require auth â€”
     /// the deployer is responsible for calling this immediately after deployment.
     ///
     /// Duplicate owner addresses are automatically deduplicated to ensure each
     /// owner is unique and counts only once toward the threshold.
     ///
     /// # Parameters
-    /// - `owners` — List of addresses that are permitted to propose, vote, and execute.
-    /// - `threshold` — Minimum number of approvals required to pass a proposal (N in N-of-M).
-    ///   Must be ≥ 1 and ≤ the number of unique owners after deduplication.
-    /// - `timelock_delay` — Seconds that must elapse after a proposal reaches the approval
+    /// - `owners` â€” List of addresses that are permitted to propose, vote, and execute.
+    /// - `threshold` â€” Minimum number of approvals required to pass a proposal (N in N-of-M).
+    ///   Must be â‰¥ 1 and â‰¤ the number of unique owners after deduplication.
+    /// - `timelock_delay` â€” Seconds that must elapse after a proposal reaches the approval
     ///   threshold before it can be executed. Use `0` for no delay.
     ///
     /// # Returns
     /// `Ok(())` on success.
     ///
     /// # Errors
-    /// - [`MultisigError::AlreadyInitialized`] — Contract has already been initialized.
-    /// - [`MultisigError::InvalidThreshold`] — `threshold` is 0 or exceeds the number of unique owners.
+    /// - [`MultisigError::AlreadyInitialized`] â€” Contract has already been initialized.
+    /// - [`MultisigError::InvalidThreshold`] â€” `threshold` is 0 or exceeds the number of unique owners.
     /// # Example
     /// ```text
     /// // 2-of-3 multisig with a 3600 s (1 h) timelock
@@ -122,7 +130,7 @@ impl MultisigContract {
         timelock_delay: u64,
     ) -> Result<(), MultisigError> {
         if env.storage().instance().has(&DataKey::Owners) {
-            return Err(MultisigError::Common(CommonError::AlreadyInitialized));
+            return Err(MultisigError::AlreadyInitialized);
         }
 
         // Deduplicate owners to ensure uniqueness
@@ -134,7 +142,7 @@ impl MultisigContract {
         }
 
         if threshold == 0 || threshold > unique_owners.len() {
-            return Err(MultisigError::Common(CommonError::InvalidThreshold));
+            return Err(MultisigError::InvalidThreshold);
         }
         env.storage()
             .instance()
@@ -163,17 +171,17 @@ impl MultisigContract {
     /// `reject`, and `execute` calls. Requires authorization from `proposer`.
     ///
     /// # Parameters
-    /// - `proposer` — An owner address submitting the proposal.
-    /// - `to` — Destination address that will receive the tokens if executed.
-    /// - `token` — Address of the Soroban token contract to transfer from.
-    /// - `amount` — Number of tokens (in the token's smallest unit) to transfer. Must be > 0.
+    /// - `proposer` â€” An owner address submitting the proposal.
+    /// - `to` â€” Destination address that will receive the tokens if executed.
+    /// - `token` â€” Address of the Soroban token contract to transfer from.
+    /// - `amount` â€” Number of tokens (in the token's smallest unit) to transfer. Must be > 0.
     ///
     /// # Returns
-    /// `Ok(proposal_id)` — the unique ID assigned to the new proposal.
+    /// `Ok(proposal_id)` â€” the unique ID assigned to the new proposal.
     ///
     /// # Errors
-    /// - [`MultisigError::Unauthorized`] — `proposer` is not in the owner list.
-    /// - [`MultisigError::InvalidAmount`] — `amount` is ≤ 0.
+    /// - [`MultisigError::Unauthorized`] â€” `proposer` is not in the owner list.
+    /// - [`MultisigError::InvalidAmount`] â€” `amount` is â‰¤ 0.
     ///
     /// # Example
     /// ```text
@@ -190,7 +198,7 @@ impl MultisigContract {
         Self::require_owner(&env, &proposer)?;
 
         if amount <= 0 {
-            return Err(MultisigError::Common(CommonError::InvalidAmount));
+            return Err(MultisigError::InvalidAmount);
         }
 
         log!(&env, "proposing transfer amount: {}", amount);
@@ -276,20 +284,20 @@ impl MultisigContract {
     /// On Soroban, native XLM is accessed through the Stellar Asset Contract
     /// (SAC) for the native asset. The SAC exposes the same `token::Client`
     /// interface as any other Soroban token, so `execute()` handles both cases
-    /// identically — the `is_native` flag is a semantic marker for callers.
+    /// identically â€” the `is_native` flag is a semantic marker for callers.
     ///
     /// # Parameters
-    /// - `proposer` — An owner address submitting the proposal.
-    /// - `to` — Destination address that will receive XLM if executed.
-    /// - `xlm_token` — Address of the native asset SAC contract.
-    /// - `amount` — Stroops to transfer (1 XLM = 10,000,000 stroops). Must be > 0.
+    /// - `proposer` â€” An owner address submitting the proposal.
+    /// - `to` â€” Destination address that will receive XLM if executed.
+    /// - `xlm_token` â€” Address of the native asset SAC contract.
+    /// - `amount` â€” Stroops to transfer (1 XLM = 10,000,000 stroops). Must be > 0.
     ///
     /// # Returns
-    /// `Ok(proposal_id)` — the unique ID assigned to the new proposal.
+    /// `Ok(proposal_id)` â€” the unique ID assigned to the new proposal.
     ///
     /// # Errors
-    /// - [`MultisigError::Unauthorized`] — `proposer` is not in the owner list.
-    /// - [`MultisigError::InvalidAmount`] — `amount` is ≤ 0.
+    /// - [`MultisigError::Unauthorized`] â€” `proposer` is not in the owner list.
+    /// - [`MultisigError::InvalidAmount`] â€” `amount` is â‰¤ 0.
     ///
     /// # Example
     /// ```text
@@ -307,7 +315,7 @@ impl MultisigContract {
         Self::require_owner(&env, &proposer)?;
 
         if amount <= 0 {
-            return Err(MultisigError::Common(CommonError::InvalidAmount));
+            return Err(MultisigError::InvalidAmount);
         }
 
         let proposal_id: u64 = env
@@ -389,18 +397,18 @@ impl MultisigContract {
     /// Requires authorization from `owner`.
     ///
     /// # Parameters
-    /// - `owner` — An owner address casting the approval vote.
-    /// - `proposal_id` — ID of the proposal to approve.
+    /// - `owner` â€” An owner address casting the approval vote.
+    /// - `proposal_id` â€” ID of the proposal to approve.
     ///
     /// # Returns
     /// `Ok(())` on success.
     ///
     /// # Errors
-    /// - [`MultisigError::Unauthorized`] — `owner` is not in the owner list.
-    /// - [`MultisigError::ProposalNotFound`] — No proposal exists with `proposal_id`.
-    /// - [`MultisigError::AlreadyVoted`] — `owner` has already approved or rejected this proposal.
-    /// - [`MultisigError::AlreadyExecuted`] — The proposal has already been executed.
-    /// - [`MultisigError::AlreadyCancelled`] — The proposal has been cancelled.
+    /// - [`MultisigError::Unauthorized`] â€” `owner` is not in the owner list.
+    /// - [`MultisigError::ProposalNotFound`] â€” No proposal exists with `proposal_id`.
+    /// - [`MultisigError::AlreadyVoted`] â€” `owner` has already approved or rejected this proposal.
+    /// - [`MultisigError::AlreadyExecuted`] â€” The proposal has already been executed.
+    /// - [`MultisigError::AlreadyCancelled`] â€” The proposal has been cancelled.
     ///
     /// # Example
     /// ```text
@@ -416,13 +424,13 @@ impl MultisigContract {
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .ok_or(MultisigError::Common(CommonError::ProposalNotFound))?;
+            .ok_or(MultisigError::ProposalNotFound)?;
 
         if proposal.executed {
-            return Err(MultisigError::Common(CommonError::AlreadyExecuted));
+            return Err(MultisigError::AlreadyExecuted);
         }
         if proposal.cancelled {
-            return Err(MultisigError::Common(CommonError::AlreadyCancelled));
+            return Err(MultisigError::AlreadyCancelled);
         }
         if env
             .storage()
@@ -435,7 +443,7 @@ impl MultisigContract {
                 .get::<DataKey, bool>(&DataKey::HasRejected(proposal_id, owner.clone()))
                 .unwrap_or(false)
         {
-            return Err(MultisigError::Common(CommonError::AlreadyVoted));
+            return Err(MultisigError::AlreadyVoted);
         }
 
         proposal.approval_count = proposal.approval_count.saturating_add(1);
@@ -494,17 +502,17 @@ impl MultisigContract {
     /// Requires authorization from `owner`.
     ///
     /// # Parameters
-    /// - `owner` — An owner address casting the rejection vote.
-    /// - `proposal_id` — ID of the proposal to reject.
+    /// - `owner` â€” An owner address casting the rejection vote.
+    /// - `proposal_id` â€” ID of the proposal to reject.
     ///
     /// # Returns
     /// `Ok(())` on success.
     ///
     /// # Errors
-    /// - [`MultisigError::Unauthorized`] — `owner` is not in the owner list.
-    /// - [`MultisigError::ProposalNotFound`] — No proposal exists with `proposal_id`.
-    /// - [`MultisigError::AlreadyVoted`] — `owner` has already approved or rejected this proposal.
-    /// - [`MultisigError::AlreadyExecuted`] — The proposal has already been executed.
+    /// - [`MultisigError::Unauthorized`] â€” `owner` is not in the owner list.
+    /// - [`MultisigError::ProposalNotFound`] â€” No proposal exists with `proposal_id`.
+    /// - [`MultisigError::AlreadyVoted`] â€” `owner` has already approved or rejected this proposal.
+    /// - [`MultisigError::AlreadyExecuted`] â€” The proposal has already been executed.
     ///
     /// # Example
     /// ```text
@@ -520,13 +528,13 @@ impl MultisigContract {
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .ok_or(MultisigError::Common(CommonError::ProposalNotFound))?;
+            .ok_or(MultisigError::ProposalNotFound)?;
 
         if proposal.executed {
-            return Err(MultisigError::Common(CommonError::AlreadyExecuted));
+            return Err(MultisigError::AlreadyExecuted);
         }
         if proposal.cancelled {
-            return Err(MultisigError::Common(CommonError::AlreadyCancelled));
+            return Err(MultisigError::AlreadyCancelled);
         }
         if env
             .storage()
@@ -539,7 +547,7 @@ impl MultisigContract {
                 .get::<DataKey, bool>(&DataKey::HasRejected(proposal_id, owner.clone()))
                 .unwrap_or(false)
         {
-            return Err(MultisigError::Common(CommonError::AlreadyVoted));
+            return Err(MultisigError::AlreadyVoted);
         }
 
         proposal.rejection_count = proposal.rejection_count.saturating_add(1);
@@ -566,19 +574,19 @@ impl MultisigContract {
     /// `approved_at`. Requires authorization from `executor`.
     ///
     /// # Parameters
-    /// - `executor` — An owner address triggering execution.
-    /// - `proposal_id` — ID of the proposal to execute.
+    /// - `executor` â€” An owner address triggering execution.
+    /// - `proposal_id` â€” ID of the proposal to execute.
     ///
     /// # Returns
     /// `Ok(())` on success.
     ///
     /// # Errors
-    /// - [`MultisigError::Unauthorized`] — `executor` is not in the owner list.
-    /// - [`MultisigError::ProposalNotFound`] — No proposal exists with `proposal_id`.
-    /// - [`MultisigError::AlreadyExecuted`] — The proposal has already been executed.
-    /// - [`MultisigError::AlreadyCancelled`] — The proposal has been cancelled.
-    /// - [`MultisigError::InsufficientApprovals`] — Threshold has not been reached yet.
-    /// - [`MultisigError::TimelockNotElapsed`] — The timelock delay has not fully passed.
+    /// - [`MultisigError::Unauthorized`] â€” `executor` is not in the owner list.
+    /// - [`MultisigError::ProposalNotFound`] â€” No proposal exists with `proposal_id`.
+    /// - [`MultisigError::AlreadyExecuted`] â€” The proposal has already been executed.
+    /// - [`MultisigError::AlreadyCancelled`] â€” The proposal has been cancelled.
+    /// - [`MultisigError::InsufficientApprovals`] â€” Threshold has not been reached yet.
+    /// - [`MultisigError::TimelockNotElapsed`] â€” The timelock delay has not fully passed.
     ///
     /// # Example
     /// ```text
@@ -638,7 +646,7 @@ impl MultisigContract {
         );
 
         // Mark executed AFTER the transfer succeeds. Setting executed = true before
-        // the transfer would permanently lock funds if the transfer traps — the
+        // the transfer would permanently lock funds if the transfer traps â€” the
         // proposal would be unretryable and the tokens unreachable forever.
         proposal.executed = true;
         env.storage()
@@ -675,18 +683,18 @@ impl MultisigContract {
     /// Requires authorization from `owner`.
     ///
     /// # Parameters
-    /// - `owner` — An owner address requesting cancellation.
-    /// - `proposal_id` — ID of the proposal to cancel.
+    /// - `owner` â€” An owner address requesting cancellation.
+    /// - `proposal_id` â€” ID of the proposal to cancel.
     ///
     /// # Returns
     /// `Ok(())` on success.
     ///
     /// # Errors
-    /// - [`MultisigError::Unauthorized`] — `owner` is not in the owner list.
-    /// - [`MultisigError::ProposalNotFound`] — No proposal exists with `proposal_id`.
-    /// - [`MultisigError::AlreadyExecuted`] — The proposal has already been executed.
-    /// - [`MultisigError::AlreadyCancelled`] — The proposal has already been cancelled.
-    /// - [`MultisigError::CannotCancel`] — The proposal can still reach the approval threshold.
+    /// - [`MultisigError::Unauthorized`] â€” `owner` is not in the owner list.
+    /// - [`MultisigError::ProposalNotFound`] â€” No proposal exists with `proposal_id`.
+    /// - [`MultisigError::AlreadyExecuted`] â€” The proposal has already been executed.
+    /// - [`MultisigError::AlreadyCancelled`] â€” The proposal has already been cancelled.
+    /// - [`MultisigError::CannotCancel`] â€” The proposal can still reach the approval threshold.
     /// # Example
     /// ```text
     /// // Cancel a proposal that can no longer reach threshold
@@ -820,7 +828,7 @@ impl MultisigContract {
     /// convention used across all Forge contracts (e.g., `forge-governor`).
     ///
     /// # Parameters
-    /// - `proposal_id` — The ID returned by [`propose`](Self::propose).
+    /// - `proposal_id` â€” The ID returned by [`propose`](Self::propose).
     ///
     /// # Returns
     /// `Ok(`[`Proposal`]`)` if found, `Err(`[`MultisigError::ProposalNotFound`]`)` otherwise.
@@ -889,7 +897,7 @@ impl MultisigContract {
     /// the approval threshold before it can be executed.
     ///
     /// # Returns
-    /// `u64` — the timelock delay in seconds set at initialization.
+    /// `u64` â€” the timelock delay in seconds set at initialization.
     ///
     /// # Example
     /// ```text
@@ -910,7 +918,7 @@ impl MultisigContract {
     /// UIs or integrators only need to verify ownership status.
     ///
     /// # Parameters
-    /// - `address` — The address to check for ownership.
+    /// - `address` â€” The address to check for ownership.
     ///
     /// # Returns
     /// `true` if `address` is in the owner list, `false` otherwise.
@@ -934,7 +942,7 @@ impl MultisigContract {
     /// Returns `0` if the proposal does not exist.
     ///
     /// # Parameters
-    /// - `proposal_id` — The target proposal ID.
+    /// - `proposal_id` â€” The target proposal ID.
     ///
     /// # Returns
     /// Number of approvals currently recorded for the proposal.
@@ -955,10 +963,10 @@ impl MultisigContract {
     /// transferring funds.
     ///
     /// # Parameters
-    /// - `token` — The token contract address to query.
+    /// - `token` â€” The token contract address to query.
     ///
     /// # Returns
-    /// `i128` — total committed tokens for `token`. Returns `0` if none committed.
+    /// `i128` â€” total committed tokens for `token`. Returns `0` if none committed.
     pub fn get_committed_amount(env: Env, token: Address) -> i128 {
         env.storage()
             .persistent()
@@ -966,12 +974,12 @@ impl MultisigContract {
             .unwrap_or(0)
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
+    // â”€â”€ Private â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn require_owner(env: &Env, address: &Address) -> Result<(), MultisigError> {
-        // Guard against calls before initialize() — IsOwner keys only exist post-init.
+        // Guard against calls before initialize() â€” IsOwner keys only exist post-init.
         if !env.storage().instance().has(&DataKey::Owners) {
-            return Err(MultisigError::Common(CommonError::NotInitialized));
+            return Err(MultisigError::NotInitialized);
         }
         let is_owner: bool = env
             .storage()
@@ -981,12 +989,12 @@ impl MultisigContract {
         if is_owner {
             Ok(())
         } else {
-            return Err(MultisigError::Common(CommonError::Unauthorized));
+            return Err(MultisigError::Unauthorized);
         }
     }
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[cfg(test)]
 mod tests {
@@ -1035,14 +1043,14 @@ mod tests {
         assert_eq!(result, Err(Ok(MultisigError::InvalidThreshold)));
     }
 
-    /// TC: unanimous 3-of-3 multisig — every owner must approve before execution.
+    /// TC: unanimous 3-of-3 multisig â€” every owner must approve before execution.
     ///
     /// Steps:
     /// 1. Initialize 3-of-3 with a 3600 s timelock.
-    /// 2. propose() — auto-approves o1 (1/3); approved_at must still be None.
-    /// 3. approve(o2) — 2/3; approved_at must still be None.
-    /// 4. approve(o3) — 3/3 hits threshold; approved_at must be Some(timestamp).
-    /// 5. Advance past timelock and execute — assert proposal.executed.
+    /// 2. propose() â€” auto-approves o1 (1/3); approved_at must still be None.
+    /// 3. approve(o2) â€” 2/3; approved_at must still be None.
+    /// 4. approve(o3) â€” 3/3 hits threshold; approved_at must be Some(timestamp).
+    /// 5. Advance past timelock and execute â€” assert proposal.executed.
     #[test]
     fn test_unanimous_3of3_multisig() {
         let env = Env::default();
@@ -1063,7 +1071,7 @@ mod tests {
         let to = Address::generate(&env);
         soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &500);
 
-        // Step 2: propose — o1 auto-approves (1/3), threshold not yet reached
+        // Step 2: propose â€” o1 auto-approves (1/3), threshold not yet reached
         let pid = client.propose(&o1, &to, &token_id, &500);
         assert!(client.get_proposal(&pid).unwrap().approved_at.is_none());
 
@@ -1240,7 +1248,7 @@ mod tests {
         let token = Address::generate(&env);
         let to = Address::generate(&env);
 
-        // Only proposer's auto-approval — 1 of 2 required
+        // Only proposer's auto-approval â€” 1 of 2 required
         let pid = client.propose(&o1, &to, &token, &500);
         env.ledger().with_mut(|l| l.timestamp = 7200);
         let result = client.try_execute(&o3, &pid);
@@ -1514,9 +1522,9 @@ mod tests {
     /// 1. Set up 2-of-3 multisig with owners o1, o2, o3
     /// 2. o1 proposes (auto-approves, 1 approval)
     /// 3. o2 rejects (1 approval, 1 rejection)
-    /// 4. o3 approves — threshold of 2 is now reached
+    /// 4. o3 approves â€” threshold of 2 is now reached
     /// 5. Assert proposal.approved_at is set after o3 approves
-    /// 6. Advance past timelock and execute — assert success
+    /// 6. Advance past timelock and execute â€” assert success
     /// 7. Verify token balances are correct
     #[test]
     fn test_mixed_approval_rejection_threshold_reached() {
@@ -1566,7 +1574,7 @@ mod tests {
         assert_eq!(proposal.rejection_count, 1);
         assert_eq!(proposal.approved_at, None);
 
-        // o3 approves — threshold of 2 is now reached
+        // o3 approves â€” threshold of 2 is now reached
         client.approve(&o3, &pid);
 
         // Verify state after o3 approves: 2 approvals, 1 rejection, approved_at is set
@@ -1624,7 +1632,7 @@ mod tests {
         assert!(!proposal_after.executed);
     }
 
-    // ── Timelock enforcement tests ────────────────────────────────────────────
+    // â”€â”€ Timelock enforcement tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     //
     // The timelock acts as a "cooling-off" period: even after enough owners have
     // approved a proposal, funds cannot move until the configured delay has fully
@@ -1664,7 +1672,7 @@ mod tests {
         (client, [o1, o2, o3], token_id, recipient, contract_id)
     }
 
-    /// TC1 — Premature execution (T+23 h) must revert with TimelockNotElapsed.
+    /// TC1 â€” Premature execution (T+23 h) must revert with TimelockNotElapsed.
     #[test]
     fn test_timelock_premature_execution_reverts() {
         let env = Env::default();
@@ -1677,13 +1685,13 @@ mod tests {
         let pid = client.propose(&o1, &recipient, &token_id, &100);
         client.approve(&o2, &pid); // threshold reached at T=0
 
-        // Advance to T+23 h — one hour short of the required delay
+        // Advance to T+23 h â€” one hour short of the required delay
         env.ledger().with_mut(|l| l.timestamp = DELAY - 3_600);
         let result = client.try_execute(&o3, &pid);
         assert_eq!(result, Err(Ok(MultisigError::TimelockNotElapsed)));
     }
 
-    /// TC2 — Execution at exactly T+24 h+1 s must succeed and mark the proposal executed.
+    /// TC2 â€” Execution at exactly T+24 h+1 s must succeed and mark the proposal executed.
     #[test]
     fn test_timelock_exact_boundary_execution_succeeds() {
         let env = Env::default();
@@ -1696,14 +1704,14 @@ mod tests {
         let pid = client.propose(&o1, &recipient, &token_id, &100);
         client.approve(&o2, &pid); // threshold reached at T=0
 
-        // Advance to T+24 h+1 s — just past the boundary
+        // Advance to T+24 h+1 s â€” just past the boundary
         env.ledger().with_mut(|l| l.timestamp = DELAY + 1);
         client.execute(&o3, &pid);
 
         assert!(client.get_proposal(&pid).unwrap().executed);
     }
 
-    /// TC3 — Zero-delay timelock: execute() must succeed immediately after threshold is met.
+    /// TC3 â€” Zero-delay timelock: execute() must succeed immediately after threshold is met.
     #[test]
     fn test_timelock_zero_delay_executes_immediately() {
         let env = Env::default();
@@ -1713,7 +1721,7 @@ mod tests {
         let (client, [o1, o2, o3], token_id, recipient, _) = setup_funded(&env, 0);
 
         let pid = client.propose(&o1, &recipient, &token_id, &100);
-        client.approve(&o2, &pid); // threshold reached — no time advance needed
+        client.approve(&o2, &pid); // threshold reached â€” no time advance needed
 
         client.execute(&o3, &pid);
         assert!(client.get_proposal(&pid).unwrap().executed);
@@ -1787,10 +1795,10 @@ mod tests {
         assert!(owner_list.contains(&o3));
     }
 
-    // ── 1-of-N threshold tests ─────────────────────────────────────────────────
+    // â”€â”€ 1-of-N threshold tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     //
     // A threshold of 1 means any single owner can unilaterally authorize a
-    // treasury transfer. This is a valid but high-risk configuration — useful for
+    // treasury transfer. This is a valid but high-risk configuration â€” useful for
     // hot wallets or automated systems where speed matters more than consensus.
     // It must be fully supported for flexible treasury management.
 
@@ -1819,7 +1827,7 @@ mod tests {
         (client, o1, o2, o3, token_id, recipient)
     }
 
-    /// TC1 — Single approval flow: proposer's own approval meets threshold=1,
+    /// TC1 â€” Single approval flow: proposer's own approval meets threshold=1,
     /// proposal is ready after timelock elapses.
     #[test]
     fn test_threshold_1_single_approval_flow() {
@@ -1829,7 +1837,7 @@ mod tests {
 
         let (client, o1, _, o3, token_id, recipient) = setup_1of3_funded(&env);
 
-        // propose auto-approves for proposer — threshold=1 is immediately met
+        // propose auto-approves for proposer â€” threshold=1 is immediately met
         let pid = client.propose(&o1, &recipient, &token_id, &100);
         let proposal = client.get_proposal(&pid).unwrap();
         assert_eq!(proposal.approval_count, 1);
@@ -1841,7 +1849,7 @@ mod tests {
         assert!(client.get_proposal(&pid).unwrap().executed);
     }
 
-    /// TC2 — Inter-owner independence: Owner B's approved proposal cannot be
+    /// TC2 â€” Inter-owner independence: Owner B's approved proposal cannot be
     /// blocked by Owner C rejecting after threshold is already met.
     #[test]
     fn test_threshold_1_rejection_cannot_block_approved_proposal() {
@@ -1851,11 +1859,11 @@ mod tests {
 
         let (client, _, o2, o3, token_id, recipient) = setup_1of3_funded(&env);
 
-        // o2 proposes — threshold=1 met immediately via auto-approval
+        // o2 proposes â€” threshold=1 met immediately via auto-approval
         let pid = client.propose(&o2, &recipient, &token_id, &100);
         assert!(client.get_proposal(&pid).unwrap().approved_at.is_some());
 
-        // o3 tries to reject — already voted check: o3 hasn't voted, so rejection
+        // o3 tries to reject â€” already voted check: o3 hasn't voted, so rejection
         // is recorded, but approved_at is already set and cannot be unset
         client.reject(&o3, &pid);
         let proposal = client.get_proposal(&pid).unwrap();
@@ -1868,7 +1876,7 @@ mod tests {
         assert!(client.get_proposal(&pid).unwrap().executed);
     }
 
-    /// TC3 — Immediate threshold check: get_proposal returns approvals=1 right
+    /// TC3 â€” Immediate threshold check: get_proposal returns approvals=1 right
     /// after propose(), confirming threshold=1 is satisfied by the proposer alone.
     #[test]
     fn test_threshold_1_immediate_approval_count() {
@@ -1895,7 +1903,7 @@ mod tests {
         assert_eq!(result, Err(Ok(MultisigError::Unauthorized)));
     }
 
-    // ── Non-owner propose() rejection ─────────────────────────────────────────
+    // â”€â”€ Non-owner propose() rejection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_non_owner_propose_reverts() {
@@ -1948,7 +1956,7 @@ mod tests {
         assert_eq!(client.get_approval_count(&0), 0);
     }
 
-    // ── Token balance verification after execute() ────────────────────────────
+    // â”€â”€ Token balance verification after execute() â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// After a proposal is approved, the timelock elapses, and execute() is called,
     /// the recipient's token balance must increase by exactly the proposed amount,
@@ -2011,8 +2019,8 @@ mod tests {
     #[test]
     fn test_propose_emits_event() {
         use soroban_sdk::testutils::Events;
-        use soroban_sdk::TryFromVal;
-        let env = Env::default();
+use soroban_sdk::TryFromVal;
+let env = Env::default();
         env.mock_all_auths();
         let (client, o1, _, _) = setup_2of3(&env);
         let token = Address::generate(&env);
@@ -2079,8 +2087,8 @@ mod tests {
     #[test]
     fn test_approve_emits_event() {
         use soroban_sdk::testutils::Events;
-        use soroban_sdk::TryFromVal;
-        let env = Env::default();
+use soroban_sdk::TryFromVal;
+let env = Env::default();
         env.mock_all_auths();
         let (client, o1, o2, _) = setup_2of3(&env);
         let token = Address::generate(&env);
@@ -2107,8 +2115,8 @@ mod tests {
     #[test]
     fn test_reject_emits_event() {
         use soroban_sdk::testutils::Events;
-        use soroban_sdk::TryFromVal;
-        let env = Env::default();
+use soroban_sdk::TryFromVal;
+let env = Env::default();
         env.mock_all_auths();
         let (client, o1, o2, _) = setup_2of3(&env);
         let token = Address::generate(&env);
@@ -2296,8 +2304,8 @@ mod tests {
     #[test]
     fn test_execute_emits_event() {
         use soroban_sdk::testutils::Events;
-        use soroban_sdk::TryFromVal;
-        let env = Env::default();
+use soroban_sdk::TryFromVal;
+let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|l| l.timestamp = 0);
 
@@ -2386,11 +2394,11 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ── CommittedAmount / over-commitment tests ───────────────────────────────
+    // â”€â”€ CommittedAmount / over-commitment tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     fn setup_token(env: &Env, contract_id: &Address, amount: i128) -> Address {
         use soroban_sdk::token::StellarAssetClient;
-        let token_admin = Address::generate(env);
+let token_admin = Address::generate(env);
         let token_id = env
             .register_stellar_asset_contract_v2(token_admin)
             .address();
@@ -2416,7 +2424,7 @@ mod tests {
         let token_id = setup_token(&env, &contract_id, 1000);
         let recipient = Address::generate(&env);
 
-        // Propose two transfers of 800 each — together they exceed the 1000 balance
+        // Propose two transfers of 800 each â€” together they exceed the 1000 balance
         let pid1 = client.propose(&o1, &recipient, &token_id, &800);
         let pid2 = client.propose(&o1, &recipient, &token_id, &800);
 
@@ -2424,16 +2432,16 @@ mod tests {
         client.approve(&o2, &pid1);
         client.approve(&o2, &pid2);
 
-        // committed = 1600, balance = 1000 → first execute succeeds
+        // committed = 1600, balance = 1000 â†’ first execute succeeds
         let result1 = client.try_execute(&o1, &pid1);
         assert!(result1.is_ok(), "first execute should succeed");
 
-        // After first execute: balance = 200, committed = 800 → second must fail
+        // After first execute: balance = 200, committed = 800 â†’ second must fail
         let result2 = client.try_execute(&o1, &pid2);
         assert_eq!(result2, Err(Ok(MultisigError::InsufficientFunds)));
     }
 
-    /// get_committed_amount tracks the lifecycle: 0 → committed → released on execute.
+    /// get_committed_amount tracks the lifecycle: 0 â†’ committed â†’ released on execute.
     #[test]
     fn test_committed_amount_lifecycle() {
         let env = Env::default();
@@ -2452,15 +2460,15 @@ mod tests {
         assert_eq!(client.get_committed_amount(&token_id), 0);
 
         let pid = client.propose(&o1, &recipient, &token_id, &300);
-        // Not yet at threshold — committed still 0
+        // Not yet at threshold â€” committed still 0
         assert_eq!(client.get_committed_amount(&token_id), 0);
 
         client.approve(&o2, &pid);
-        // Threshold reached — committed = 300
+        // Threshold reached â€” committed = 300
         assert_eq!(client.get_committed_amount(&token_id), 300);
 
         client.execute(&o1, &pid);
-        // Executed — committed back to 0
+        // Executed â€” committed back to 0
         assert_eq!(client.get_committed_amount(&token_id), 0);
     }
 
@@ -2484,7 +2492,7 @@ mod tests {
         client.approve(&o2, &pid);
         assert_eq!(client.get_committed_amount(&token_id), 500);
 
-        // Proposer cancels — committed must be released
+        // Proposer cancels â€” committed must be released
         client.cancel(&o1, &pid);
         assert_eq!(client.get_committed_amount(&token_id), 0);
     }
@@ -2511,7 +2519,7 @@ mod tests {
         let pid = client.propose(&o1, &recipient, &token_id, &500);
         client.approve(&o2, &pid);
 
-        // Contract has zero balance — execute must return InsufficientFunds
+        // Contract has zero balance â€” execute must return InsufficientFunds
         let result = client.try_execute(&o1, &pid);
         assert_eq!(result, Err(Ok(MultisigError::InsufficientFunds)));
     }
@@ -2539,13 +2547,13 @@ mod tests {
         let pid = client.propose(&o1, &recipient, &token_id, &500);
         client.approve(&o2, &pid);
 
-        // Contract has exactly 500 — execute must succeed
+        // Contract has exactly 500 â€” execute must succeed
         let result = client.try_execute(&o1, &pid);
         assert!(result.is_ok(), "execute should succeed with exact balance");
         assert!(client.get_proposal(&pid).unwrap().executed);
     }
 
-    // ── Native XLM proposal tests ─────────────────────────────────────────────
+    // â”€â”€ Native XLM proposal tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Helper: 2-of-3 multisig with zero timelock, funded with native XLM via SAC.
     fn setup_xlm_funded<'a>(
@@ -2595,7 +2603,7 @@ mod tests {
         assert!(!proposal.cancelled);
     }
 
-    /// Full flow: propose_xlm → approve → execute transfers XLM to recipient.
+    /// Full flow: propose_xlm â†’ approve â†’ execute transfers XLM to recipient.
     #[test]
     fn test_propose_xlm_approve_execute_transfers_xlm() {
         let env = Env::default();
@@ -2606,11 +2614,11 @@ mod tests {
         let amount: i128 = 100_000_000; // 10 XLM
         let pid = client.propose_xlm(&o1, &recipient, &xlm_sac, &amount);
 
-        // o2 approves — threshold=2 reached
+        // o2 approves â€” threshold=2 reached
         client.approve(&o2, &pid);
         assert!(client.get_proposal(&pid).unwrap().approved_at.is_some());
 
-        // execute (zero timelock — no advance needed)
+        // execute (zero timelock â€” no advance needed)
         client.execute(&o3, &pid);
 
         // recipient received the XLM
@@ -2643,7 +2651,7 @@ mod tests {
     }
 
     /// A regular token proposal and a native XLM proposal can coexist and both
-    /// execute correctly — is_native does not bleed across proposals.
+    /// execute correctly â€” is_native does not bleed across proposals.
     #[test]
     fn test_token_and_xlm_proposals_coexist() {
         let env = Env::default();
@@ -2701,7 +2709,7 @@ mod tests {
             .address();
         let recipient = Address::generate(&env);
 
-        // Propose 500 but do NOT fund the contract — transfer will fail
+        // Propose 500 but do NOT fund the contract â€” transfer will fail
         let pid = client.propose(&o1, &recipient, &token_id, &500);
         client.approve(&o2, &pid);
 
@@ -2709,7 +2717,7 @@ mod tests {
         let result = client.try_execute(&o1, &pid);
         assert_eq!(result, Err(Ok(MultisigError::InsufficientFunds)));
 
-        // proposal.executed must still be false — proposal is retryable
+        // proposal.executed must still be false â€” proposal is retryable
         let proposal = client.get_proposal(&pid).unwrap();
         assert!(
             !proposal.executed,
@@ -2717,7 +2725,7 @@ mod tests {
         );
     }
 
-    // ── Issue #336: cancel() by non-proposer boundary — unreachable threshold ──
+    // â”€â”€ Issue #336: cancel() by non-proposer boundary â€” unreachable threshold â”€â”€
 
     /// Regression test for issue #225: execute() must not transfer tokens twice.
     ///
@@ -2770,21 +2778,21 @@ mod tests {
     /// is blocked (remaining_possible == threshold) vs allowed (remaining_possible < threshold).
     ///
     /// Timeline:
-    ///   o1 proposes  → approval=1, rejection=0, remaining_possible=4  (4 >= 3 → cannot cancel)
-    ///   o2 rejects   → approval=1, rejection=1, remaining_possible=3  (3 >= 3 → cannot cancel)
-    ///   o3 rejects   → approval=1, rejection=2, remaining_possible=2  (2 < 3  → can cancel)
-    ///   o4 tries cancel at remaining=2 → CannotCancel (boundary: 2 == threshold-1? No: 2 < 3)
+    ///   o1 proposes  â†’ approval=1, rejection=0, remaining_possible=4  (4 >= 3 â†’ cannot cancel)
+    ///   o2 rejects   â†’ approval=1, rejection=1, remaining_possible=3  (3 >= 3 â†’ cannot cancel)
+    ///   o3 rejects   â†’ approval=1, rejection=2, remaining_possible=2  (2 < 3  â†’ can cancel)
+    ///   o4 tries cancel at remaining=2 â†’ CannotCancel (boundary: 2 == threshold-1? No: 2 < 3)
     ///
-    /// Wait — let's be precise per the contract logic:
+    /// Wait â€” let's be precise per the contract logic:
     ///   remaining_possible = total_owners - rejection_count - approval_count
     ///   cancel allowed when remaining_possible < threshold
     ///
-    ///   After o1 proposes (approval=1, rejection=0): remaining = 5-0-1 = 4; 4 >= 3 → CannotCancel
-    ///   After o2 rejects  (approval=1, rejection=1): remaining = 5-1-1 = 3; 3 >= 3 → CannotCancel
-    ///   After o3 rejects  (approval=1, rejection=2): remaining = 5-2-1 = 2; 2 < 3  → can cancel
-    ///   o4 attempts cancel at remaining=3 (after o2 rejects) → CannotCancel
-    ///   o4 rejects        (approval=1, rejection=3): remaining = 5-3-1 = 1; 1 < 3  → can cancel
-    ///   o5 calls cancel() → success, proposal.cancelled == true
+    ///   After o1 proposes (approval=1, rejection=0): remaining = 5-0-1 = 4; 4 >= 3 â†’ CannotCancel
+    ///   After o2 rejects  (approval=1, rejection=1): remaining = 5-1-1 = 3; 3 >= 3 â†’ CannotCancel
+    ///   After o3 rejects  (approval=1, rejection=2): remaining = 5-2-1 = 2; 2 < 3  â†’ can cancel
+    ///   o4 attempts cancel at remaining=3 (after o2 rejects) â†’ CannotCancel
+    ///   o4 rejects        (approval=1, rejection=3): remaining = 5-3-1 = 1; 1 < 3  â†’ can cancel
+    ///   o5 calls cancel() â†’ success, proposal.cancelled == true
     #[test]
     fn test_cancel_non_proposer_boundary_3of5() {
         let env = Env::default();
@@ -2816,7 +2824,7 @@ mod tests {
         let token = Address::generate(&env);
         let to = Address::generate(&env);
 
-        // o1 proposes — auto-approves (approval=1, rejection=0, remaining=4)
+        // o1 proposes â€” auto-approves (approval=1, rejection=0, remaining=4)
         let pid = client.propose(&o1, &to, &token, &100);
         {
             let p = client.get_proposal(&pid).unwrap();
@@ -2824,13 +2832,13 @@ mod tests {
             assert_eq!(p.rejection_count, 0);
         }
 
-        // o2 rejects → rejection=1, remaining = 5-1-1 = 3; 3 >= 3 → CannotCancel
+        // o2 rejects â†’ rejection=1, remaining = 5-1-1 = 3; 3 >= 3 â†’ CannotCancel
         client.reject(&o2, &pid);
         {
             let p = client.get_proposal(&pid).unwrap();
             assert_eq!(p.rejection_count, 1);
         }
-        // o4 attempts cancel at this point — remaining=3 == threshold → CannotCancel
+        // o4 attempts cancel at this point â€” remaining=3 == threshold â†’ CannotCancel
         let result = client.try_cancel(&o4, &pid);
         assert_eq!(
             result,
@@ -2838,21 +2846,21 @@ mod tests {
             "cancel must fail when remaining_possible == threshold (3 == 3)"
         );
 
-        // o3 rejects → rejection=2, remaining = 5-2-1 = 2; 2 < 3 → can cancel
+        // o3 rejects â†’ rejection=2, remaining = 5-2-1 = 2; 2 < 3 â†’ can cancel
         client.reject(&o3, &pid);
         {
             let p = client.get_proposal(&pid).unwrap();
             assert_eq!(p.rejection_count, 2);
         }
 
-        // o4 rejects → rejection=3, remaining = 5-3-1 = 1; 1 < 3 → can cancel
+        // o4 rejects â†’ rejection=3, remaining = 5-3-1 = 1; 1 < 3 â†’ can cancel
         client.reject(&o4, &pid);
         {
             let p = client.get_proposal(&pid).unwrap();
             assert_eq!(p.rejection_count, 3);
         }
 
-        // o5 calls cancel() — remaining=1 < threshold=3 → success
+        // o5 calls cancel() â€” remaining=1 < threshold=3 â†’ success
         let result = client.try_cancel(&o5, &pid);
         assert!(
             result.is_ok(),
@@ -2867,3 +2875,12 @@ mod tests {
         );
     }
 }
+
+}
+
+
+
+
+
+
+
