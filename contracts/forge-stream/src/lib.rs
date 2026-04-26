@@ -909,6 +909,36 @@ impl ForgeStream {
         Ok(())
     }
 
+    /// Compute the total amount of tokens streamed up to a given timestamp.
+    ///
+    /// This is the core calculation function that determines how many tokens have
+    /// accrued in a stream based on elapsed time, accounting for pauses and cancellations.
+    ///
+    /// # Logic Flow
+    ///
+    /// 1. **Cancelled streams**: Return the amount that was streamed at cancellation time
+    /// 2. **Active/finished streams**: Calculate based on effective elapsed time
+    ///
+    /// # Time Calculations
+    ///
+    /// - `effective_time`: Current time capped at stream end (prevents over-accrual)
+    /// - `raw_elapsed`: Total time from start to effective_time
+    /// - `paused_time`: Total seconds the stream has been paused
+    /// - `effective_elapsed`: raw_elapsed minus paused_time (actual streaming time)
+    ///
+    /// # Pause Handling
+    ///
+    /// If the stream is currently paused, we add the duration from `paused_at` to now
+    /// to the total paused time. This ensures paused streams don't accrue tokens.
+    ///
+    /// # Overflow Protection
+    ///
+    /// The final calculation caps the result at `total` (rate × duration) to prevent
+    /// overflow on extreme rate/elapsed combinations that might exceed i128::MAX.
+    ///
+    /// # Returns
+    ///
+    /// The total amount of tokens that have been streamed (not withdrawn) up to `now`.
     fn compute_streamed(stream: &Stream, now: u64) -> i128 {
         if stream.cancelled {
             return stream.streamed_at_cancel;
