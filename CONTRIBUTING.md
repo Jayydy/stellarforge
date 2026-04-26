@@ -10,6 +10,117 @@ Thank you for your interest in contributing to StellarForge! This document provi
 4. **Run tests**: `make test` or `cargo test --workspace`
 5. **Create Pull Request for Code Review**
 
+## 📝 Commit Message Standards
+
+We follow the [Conventional Commits](https://www.conventionalcommits.org/) specification for clear and consistent commit history.
+
+### Commit Message Format
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+### Type
+
+Must be one of the following:
+
+- **feat**: A new feature
+- **fix**: A bug fix
+- **docs**: Documentation only changes
+- **style**: Changes that don't affect code meaning (whitespace, formatting)
+- **refactor**: Code change that neither fixes a bug nor adds a feature
+- **perf**: Performance improvement
+- **test**: Adding or updating tests
+- **chore**: Changes to build process or auxiliary tools
+- **revert**: Reverts a previous commit
+
+### Scope
+
+The scope should specify the contract or component affected:
+
+- `forge-stream`
+- `forge-vesting`
+- `forge-governor`
+- `forge-multisig`
+- `forge-oracle`
+- `forge-vesting-factory`
+- `forge-errors`
+- `docs`
+- `ci`
+
+### Subject
+
+- Use imperative, present tense: "add" not "added" or "adds"
+- Don't capitalize first letter
+- No period (.) at the end
+- Limit to 50 characters
+
+### Body (Optional)
+
+- Explain what and why, not how
+- Wrap at 72 characters
+- Separate from subject with blank line
+
+### Footer (Optional)
+
+- Reference issues: `Closes #123`, `Fixes #456`, `Resolves #789`
+- Note breaking changes: `BREAKING CHANGE: description`
+
+### Examples
+
+**Simple feature:**
+```
+feat(forge-stream): add pause functionality
+
+Allows stream sender to temporarily pause token accrual.
+```
+
+**Bug fix with issue reference:**
+```
+fix(forge-oracle): return error instead of None when uninitialized
+
+Changes get_admin() and get_staleness_threshold() to return
+Result types for consistent error handling.
+
+Fixes #224
+```
+
+**Multiple changes:**
+```
+feat(forge-multisig): add event emission to all state changes
+
+- Add proposal_created event
+- Add proposal_approved event
+- Add proposal_rejected event
+- Add proposal_executed event
+
+Closes #226
+```
+
+**Breaking change:**
+```
+refactor(forge-vesting)!: change claim() return type
+
+BREAKING CHANGE: claim() now returns Result<i128, VestingError>
+instead of i128. Callers must handle the Result type.
+
+Closes #123
+```
+
+### Commit Message Rules
+
+1. **Keep commits atomic** - One logical change per commit
+2. **Write meaningful messages** - Future you will thank you
+3. **Reference issues** - Use `Closes #123` or `Fixes #456` in footer
+4. **Use present tense** - "add feature" not "added feature"
+5. **Be concise but descriptive** - Balance brevity with clarity
+6. **Separate subject from body** - Use blank line between them
+7. **Wrap body at 72 characters** - For better readability in git log
+
 ## 📦 Shared Error Crate (forge-errors)
 
 When adding new common error variants to `forge-errors`:
