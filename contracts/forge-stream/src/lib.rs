@@ -13,7 +13,7 @@
 use forge_constants::{error_codes, test};
 use forge_errors::CommonError;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, log,
 };
 
 #[contracttype]
@@ -162,11 +162,15 @@ impl ForgeStream {
 
         sender.require_auth();
 
+        log!(&env, "creating stream, rate: {}", rate_per_second);
+
         let stream_id: u64 = env
             .storage()
             .instance()
             .get(&DataKey::NextId)
             .unwrap_or(0_u64);
+
+        log!(&env, "withdrawing from stream: {}", stream_id);
 
         let now = env.ledger().timestamp();
         // Guard against overflow: rate * duration must not exceed i128::MAX.
@@ -299,6 +303,8 @@ impl ForgeStream {
         }
 
         stream.recipient.require_auth();
+
+        log!(&env, "cancelling stream: {}", stream_id);
 
         let now = env.ledger().timestamp();
         let streamed = Self::compute_streamed(&stream, now);
