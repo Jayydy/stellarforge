@@ -1,0 +1,14 @@
+[package]
+name = "stellarforge-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for StellarForge smart contracts"
+authors = ["StellarForge Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/omolobamoyinoluwa-max/stellarforge"
+
+[[bin]]
+name = "stellarforge"
+path = "src/main.rs"
+
+[dependencies]
