@@ -176,6 +176,332 @@ We are committed to obtaining formal audits before recommending production deplo
 - `forge-governor`: Coordinate protocol upgrades by routing proposals through a token-weighted voting process and enforcing execution delays, and tune parameters like fees or collateral ratios in a transparent governance flow.
 - `forge-oracle`: Feed DEX price data into AMM pools for accurate swap pricing and slippage control, or provide collateral valuation updates for lending markets so borrowing power adjusts to live market conditions.
 
+## 📚 Usage Examples
+
+This section provides practical, copy-paste examples for each contract. All examples assume you have the Stellar CLI installed and contracts deployed (see [Testnet Deployment](#-testnet-deployment)).
+
+### forge-vesting: Employee Token Grant
+
+Create a vesting schedule for an employee with a 1-year cliff and 4-year total vesting:
+
+```bash
+# Initialize vesting contract
+stellar contract invoke \
+  --id <VESTING_CONTRACT_ID> \
+  --network testnet \
+  --source admin \
+  -- \
+  initialize \
+  --token <TOKEN_ADDRESS> \
+  --beneficiary <EMPLOYEE_ADDRESS> \
+  --admin <ADMIN_ADDRESS> \
+  --total_amount 1000000 \
+  --cliff_seconds 31536000 \
+  --duration_seconds 126144000
+
+# Check vesting status
+stellar contract invoke \
+  --id <VESTING_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  get_status
+
+# Beneficiary claims vested tokens (after cliff)
+stellar contract invoke \
+  --id <VESTING_CONTRACT_ID> \
+  --network testnet \
+  --source employee \
+  -- \
+  claim
+```
+
+### forge-stream: Contractor Payment
+
+Set up a real-time payment stream for a contractor at 10 tokens per second for 30 days:
+
+```bash
+# Create stream (sender must authorize)
+stellar contract invoke \
+  --id <STREAM_CONTRACT_ID> \
+  --network testnet \
+  --source sender \
+  -- \
+  create_stream \
+  --sender <SENDER_ADDRESS> \
+  --token <TOKEN_ADDRESS> \
+  --recipient <CONTRACTOR_ADDRESS> \
+  --rate_per_second 10 \
+  --duration_seconds 2592000
+
+# Contractor withdraws accrued tokens
+stellar contract invoke \
+  --id <STREAM_CONTRACT_ID> \
+  --network testnet \
+  --source contractor \
+  -- \
+  withdraw \
+  --stream_id 0
+
+# Check stream status
+stellar contract invoke \
+  --id <STREAM_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  get_stream_status \
+  --stream_id 0
+
+# Pause stream (sender only)
+stellar contract invoke \
+  --id <STREAM_CONTRACT_ID> \
+  --network testnet \
+  --source sender \
+  -- \
+  pause_stream \
+  --stream_id 0
+```
+
+### forge-multisig: DAO Treasury Management
+
+Set up a 2-of-3 multisig treasury and execute a payment:
+
+```bash
+# Initialize multisig (2-of-3)
+stellar contract invoke \
+  --id <MULTISIG_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  initialize \
+  --owners '[<OWNER1>, <OWNER2>, <OWNER3>]' \
+  --threshold 2 \
+  --timelock_delay 86400
+
+# Owner 1 proposes a payment
+stellar contract invoke \
+  --id <MULTISIG_CONTRACT_ID> \
+  --network testnet \
+  --source owner1 \
+  -- \
+  propose \
+  --proposer <OWNER1_ADDRESS> \
+  --to <RECIPIENT_ADDRESS> \
+  --token <TOKEN_ADDRESS> \
+  --amount 50000
+
+# Owner 2 approves (reaches threshold)
+stellar contract invoke \
+  --id <MULTISIG_CONTRACT_ID> \
+  --network testnet \
+  --source owner2 \
+  -- \
+  approve \
+  --owner <OWNER2_ADDRESS> \
+  --proposal_id 0
+
+# After timelock, any owner executes
+stellar contract invoke \
+  --id <MULTISIG_CONTRACT_ID> \
+  --network testnet \
+  --source owner3 \
+  -- \
+  execute \
+  --executor <OWNER3_ADDRESS> \
+  --proposal_id 0
+```
+
+### forge-governor: Protocol Governance
+
+Create and vote on a governance proposal:
+
+```bash
+# Initialize governor
+stellar contract invoke \
+  --id <GOVERNOR_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  initialize \
+  --config '{
+    "vote_token": "<GOVERNANCE_TOKEN>",
+    "voting_period": 604800,
+    "quorum": 1000000,
+    "timelock_delay": 172800
+  }'
+
+# Create proposal
+stellar contract invoke \
+  --id <GOVERNOR_CONTRACT_ID> \
+  --network testnet \
+  --source proposer \
+  -- \
+  propose \
+  --proposer <PROPOSER_ADDRESS> \
+  --title "Increase fee to 0.5%" \
+  --description "Proposal to adjust protocol fee"
+
+# Vote on proposal (token-weighted)
+stellar contract invoke \
+  --id <GOVERNOR_CONTRACT_ID> \
+  --network testnet \
+  --source voter \
+  -- \
+  vote \
+  --voter <VOTER_ADDRESS> \
+  --proposal_id 0 \
+  --support true \
+  --weight 500000
+
+# Finalize after voting period
+stellar contract invoke \
+  --id <GOVERNOR_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  finalize \
+  --proposal_id 0
+
+# Execute after timelock
+stellar contract invoke \
+  --id <GOVERNOR_CONTRACT_ID> \
+  --network testnet \
+  --source executor \
+  -- \
+  execute \
+  --executor <EXECUTOR_ADDRESS> \
+  --proposal_id 0
+```
+
+### forge-oracle: Price Feed Integration
+
+Submit and query price data:
+
+```bash
+# Initialize oracle
+stellar contract invoke \
+  --id <ORACLE_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  initialize \
+  --admin <ADMIN_ADDRESS> \
+  --staleness_threshold 3600
+
+# Submit price (admin only)
+stellar contract invoke \
+  --id <ORACLE_CONTRACT_ID> \
+  --network testnet \
+  --source admin \
+  -- \
+  submit_price \
+  --base XLM \
+  --quote USDC \
+  --price 11000000
+
+# Query price (reverts if stale)
+stellar contract invoke \
+  --id <ORACLE_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  get_price \
+  --base XLM \
+  --quote USDC
+
+# Query price without staleness check
+stellar contract invoke \
+  --id <ORACLE_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  get_price_unsafe \
+  --base XLM \
+  --quote USDC
+```
+
+### forge-vesting-factory: Multi-Beneficiary Vesting
+
+Create multiple vesting schedules from a single contract:
+
+```bash
+# Create first vesting schedule
+stellar contract invoke \
+  --id <FACTORY_CONTRACT_ID> \
+  --network testnet \
+  --source admin \
+  -- \
+  create_schedule \
+  --token <TOKEN_ADDRESS> \
+  --beneficiary <EMPLOYEE1_ADDRESS> \
+  --admin <ADMIN_ADDRESS> \
+  --total_amount 500000 \
+  --cliff_seconds 31536000 \
+  --duration_seconds 126144000
+
+# Create second vesting schedule
+stellar contract invoke \
+  --id <FACTORY_CONTRACT_ID> \
+  --network testnet \
+  --source admin \
+  -- \
+  create_schedule \
+  --token <TOKEN_ADDRESS> \
+  --beneficiary <EMPLOYEE2_ADDRESS> \
+  --admin <ADMIN_ADDRESS> \
+  --total_amount 750000 \
+  --cliff_seconds 31536000 \
+  --duration_seconds 126144000
+
+# Beneficiary claims from their schedule
+stellar contract invoke \
+  --id <FACTORY_CONTRACT_ID> \
+  --network testnet \
+  --source employee1 \
+  -- \
+  claim \
+  --schedule_id 0
+
+# Check schedule status
+stellar contract invoke \
+  --id <FACTORY_CONTRACT_ID> \
+  --network testnet \
+  -- \
+  get_status \
+  --schedule_id 0
+```
+
+### Integration Example: Combining Contracts
+
+Example of using multiple contracts together for a DAO payment workflow:
+
+```bash
+# 1. Governor: Create proposal to fund a project
+stellar contract invoke --id <GOVERNOR_ID> --network testnet --source proposer \
+  -- propose --proposer <PROPOSER> --title "Fund Project X" --description "..."
+
+# 2. Governor: Community votes
+stellar contract invoke --id <GOVERNOR_ID> --network testnet --source voter1 \
+  -- vote --voter <VOTER1> --proposal_id 0 --support true --weight 1000000
+
+# 3. Governor: Finalize and execute (after voting + timelock)
+stellar contract invoke --id <GOVERNOR_ID> --network testnet \
+  -- finalize --proposal_id 0
+stellar contract invoke --id <GOVERNOR_ID> --network testnet --source executor \
+  -- execute --executor <EXECUTOR> --proposal_id 0
+
+# 4. Multisig: Propose actual payment from treasury
+stellar contract invoke --id <MULTISIG_ID> --network testnet --source owner1 \
+  -- propose --proposer <OWNER1> --to <PROJECT_RECIPIENT> --token <TOKEN> --amount 100000
+
+# 5. Multisig: Owners approve
+stellar contract invoke --id <MULTISIG_ID> --network testnet --source owner2 \
+  -- approve --owner <OWNER2> --proposal_id 0
+
+# 6. Multisig: Execute payment (after timelock)
+stellar contract invoke --id <MULTISIG_ID> --network testnet --source owner3 \
+  -- execute --executor <OWNER3> --proposal_id 0
+
+# 7. Stream: Set up payment stream to recipient
+stellar contract invoke --id <STREAM_ID> --network testnet --source sender \
+  -- create_stream --sender <SENDER> --token <TOKEN> --recipient <PROJECT_RECIPIENT> \
+  --rate_per_second 1 --duration_seconds 2592000
+```
+
+For more integration patterns, see the [Composability Guide](docs/composability.md).
+
 ## � Shared Error Crate
 
 ### forge-errors
