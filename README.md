@@ -867,6 +867,18 @@ Each contract in StellarForge is versioned independently. A breaking change in `
 
 ---
 
+## 🗺️ Roadmap
+
+| Status | Item | Description |
+| :--- | :--- | :--- |
+| ✅ Done | Seed script (`scripts/seed.sh`) | Idempotent script to deploy and initialize all contracts on a local or testnet network for local testing. |
+| 🚧 In Progress | Inline doc comments for `forge-stream` | Add comprehensive `///` documentation with examples to all public functions in `forge-stream`. |
+| 📅 Planned | Events for `forge-governor` and `forge-multisig` | Emit structured events on proposal creation, voting, approval, rejection, and execution to support off-chain indexing. |
+| 📅 Planned | `change_beneficiary` for `forge-vesting` | Allow the current beneficiary to transfer their vesting rights to a new address without admin involvement. |
+| 📅 Planned | Additional contract primitives | New primitives under consideration include a token-weighted escrow and a time-locked allowance contract. |
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style requirements, and the pull request process.
