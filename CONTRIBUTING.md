@@ -137,18 +137,20 @@ We welcome feature requests! Please:
 ### Before Creating Pull Request
 
 - [ ] Tests pass: `make test`
-- [ ] Code formatted: `make fmt`
-- [ ] Linting clean: `make lint`
+- [ ] Code formatted: `make fmt` or `cargo fmt --all`
+- [ ] Linting clean: `make lint` or `cargo clippy --workspace -- -D warnings`
 - [ ] Documentation updated
-- [ ] CHANGELOG.md updated
+- [ ] CHANGELOG.md updated (if applicable)
+- [ ] Branch follows naming convention (feat/, fix/, docs/, etc.)
 
 ### PR Guidelines
 
-- **Small, focused PRs** are preferred
+- **Small, focused PRs** are preferred over large, multi-purpose changes
 - **One feature per PR** when possible
 - **Include tests** for new functionality
 - **Update documentation** as needed
-- **Link to related issues**
+- **Link to related issues** using "Closes #123" or "Fixes #456" in the PR description
+- **Provide context** in the PR description explaining what changed and why
 
 ### Review Process
 
