@@ -8,7 +8,7 @@ Thank you for your interest in contributing to StellarForge! This document provi
 2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
 3. **Make your changes**
 4. **Run tests**: `make test` or `cargo test --workspace`
-5. **Submit Pull Request for Review**
+5. **Create Pull Request for Code Review**
 
 ## 📦 Shared Error Crate (forge-errors)
 
@@ -134,7 +134,7 @@ We welcome feature requests! Please:
 
 ## 📄 Pull Request Process
 
-### Before Submitting
+### Before Creating Pull Request
 
 - [ ] Tests pass: `make test`
 - [ ] Code formatted: `make fmt`
