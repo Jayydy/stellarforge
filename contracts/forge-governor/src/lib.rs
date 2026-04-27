@@ -3214,6 +3214,76 @@ mod tests {
         assert_eq!(client.get_proposal_state(&pid), ProposalState::Passed);
     }
 
+    /// Votes totalling exactly the quorum threshold must cause the proposal to pass.
+    ///
+    /// The finalize condition is `total_votes >= quorum && votes_for > votes_against`.
+    /// This test pins the boundary: total_votes == quorum (100) with a yes majority.
+    #[test]
+    fn test_finalize_votes_exactly_equal_quorum_passes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (client, token_id) = setup_with_token(&env); // quorum = 100, voting_period = 3600
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        mint(&env, &token_id, &voter, 100);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "Exact quorum boundary"),
+            &String::from_str(&env, "total_votes == quorum"),
+        );
+
+        // Cast exactly quorum votes in favour
+        client.vote(&voter, &pid, &VoteDirection::For, &100);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+
+        assert_eq!(
+            state,
+            ProposalState::Passed,
+            "proposal must pass when total_votes == quorum and yes majority holds"
+        );
+        assert_eq!(client.get_proposal(&pid).state, ProposalState::Passed);
+    }
+
+    /// One vote below the quorum threshold must cause the proposal to fail.
+    ///
+    /// total_votes == quorum - 1 (99) does not satisfy `total_votes >= quorum`,
+    /// so the proposal must resolve to Failed regardless of the vote direction.
+    #[test]
+    fn test_finalize_votes_one_below_quorum_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let (client, token_id) = setup_with_token(&env); // quorum = 100, voting_period = 3600
+
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        mint(&env, &token_id, &voter, 99);
+
+        let pid = client.propose(
+            &proposer,
+            &String::from_str(&env, "One below quorum boundary"),
+            &String::from_str(&env, "total_votes == quorum - 1"),
+        );
+
+        // Cast quorum - 1 votes in favour
+        client.vote(&voter, &pid, &VoteDirection::For, &99);
+
+        env.ledger().with_mut(|l| l.timestamp = 5000);
+        let state = client.finalize(&pid);
+
+        assert_eq!(
+            state,
+            ProposalState::Failed,
+            "proposal must fail when total_votes == quorum - 1"
+        );
+        assert_eq!(client.get_proposal(&pid).state, ProposalState::Failed);
+    }
+
     /// Test finalize() compatibility with cancel_proposal() workflow
     #[test]
     fn test_finalize_compatibility_with_cancel_proposal() {
