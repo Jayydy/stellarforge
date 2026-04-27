@@ -12,7 +12,7 @@ const INSTANCE_TTL_EXTEND: u32 = 103680;
 
 use forge_constants::ttl;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec, log,
+    contract, contracterror, contractimpl, contracttype, log, token, Address, Env, Symbol, Vec,
 };
 
 // â”€â”€ Storage keys â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -39,7 +39,7 @@ pub enum DataKey {
 
 /// A pending treasury transaction proposal.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Proposal {
     /// Who proposed this transaction.
     pub proposer: Address,
@@ -1073,20 +1073,20 @@ mod tests {
 
         // Step 2: propose â€” o1 auto-approves (1/3), threshold not yet reached
         let pid = client.propose(&o1, &to, &token_id, &500);
-        assert!(client.get_proposal(&pid).unwrap().approved_at.is_none());
+        assert!(client.get_proposal(&pid).approved_at.is_none());
 
         // Step 3: o2 approves (2/3), still not reached
         client.approve(&o2, &pid);
-        assert!(client.get_proposal(&pid).unwrap().approved_at.is_none());
+        assert!(client.get_proposal(&pid).approved_at.is_none());
 
         // Step 4: o3 approves (3/3), threshold reached
         client.approve(&o3, &pid);
-        assert!(client.get_proposal(&pid).unwrap().approved_at.is_some());
+        assert!(client.get_proposal(&pid).approved_at.is_some());
 
         // Step 5: advance past timelock and execute
         env.ledger().with_mut(|l| l.timestamp = 1000 + 3600 + 1);
         client.execute(&o1, &pid);
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     #[test]
@@ -1134,7 +1134,7 @@ mod tests {
         let pid = client.propose(&o1, &to, &token, &500);
         client.approve(&o2, &pid);
 
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.approved_at.is_some());
     }
 
@@ -1149,7 +1149,7 @@ mod tests {
 
         let result = client.try_propose(&o1, &to, &token, &0);
         assert_eq!(result, Err(Ok(MultisigError::InvalidAmount)));
-        assert!(client.get_proposal(&0).is_none());
+        assert!(client.try_get_proposal(&0).is_err());
     }
 
     /// TC: propose() with amount = -1 must return InvalidAmount and leave no proposal.
@@ -1163,7 +1163,7 @@ mod tests {
 
         let result = client.try_propose(&o1, &to, &token, &-1);
         assert_eq!(result, Err(Ok(MultisigError::InvalidAmount)));
-        assert!(client.get_proposal(&0).is_none());
+        assert!(client.try_get_proposal(&0).is_err());
     }
 
     /// TC: propose() with amount = 1 must succeed and create a proposal.
@@ -1176,7 +1176,7 @@ mod tests {
         let to = Address::generate(&env);
 
         let pid = client.propose(&o1, &to, &token, &1);
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.amount, 1);
     }
 
@@ -1235,7 +1235,7 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 7200);
         client.execute(&o3, &pid);
 
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.executed);
     }
 
@@ -1282,7 +1282,7 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 7200);
         client.execute(&o3, &pid);
 
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.executed);
     }
 
@@ -1358,7 +1358,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_approval_count_tracks_lifecycle_through_execution() {
     fn test_get_approval_count_full_lifecycle_including_execution() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1419,7 +1418,7 @@ mod tests {
         client.reject(&o3, &pid);
 
         assert_eq!(client.get_approval_count(&pid), 1);
-        assert_eq!(client.get_proposal(&pid).unwrap().rejection_count, 2);
+        assert_eq!(client.get_proposal(&pid).rejection_count, 2);
     }
 
     #[test]
@@ -1457,7 +1456,7 @@ mod tests {
         client.reject(&o3, &pid);
 
         // Verify proposal has 2 rejections
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.rejection_count, 2);
         assert_eq!(proposal.approval_count, 1); // only proposer
 
@@ -1465,7 +1464,7 @@ mod tests {
         // because 2 rejections means threshold of 3 can never be reached
         client.approve(&o4, &pid);
 
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.approval_count, 2);
 
         // Advance time past timelock
@@ -1476,7 +1475,7 @@ mod tests {
         assert_eq!(result, Err(Ok(MultisigError::InsufficientApprovals)));
 
         // Verify proposal state remains unchanged
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(!proposal.executed);
         assert_eq!(proposal.rejection_count, 2);
     }
@@ -1552,15 +1551,15 @@ mod tests {
 
         // Record initial balances
         let initial_contract_balance =
-            soroban_sdk::token::StellarAssetClient::new(&env, &token_id).balance(&contract_id);
+            soroban_sdk::token::Client::new(&env, &token_id).balance(&contract_id);
         let initial_recipient_balance =
-            soroban_sdk::token::StellarAssetClient::new(&env, &token_id).balance(&recipient);
+            soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
 
         // o1 proposes (auto-approves, 1 approval)
         let pid = client.propose(&o1, &recipient, &token_id, &500);
 
         // Verify initial state: 1 approval, 0 rejections, approved_at = None
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.approval_count, 1);
         assert_eq!(proposal.rejection_count, 0);
         assert_eq!(proposal.approved_at, None);
@@ -1569,7 +1568,7 @@ mod tests {
         client.reject(&o2, &pid);
 
         // Verify state after rejection: still 1 approval, 1 rejection, approved_at = None
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.approval_count, 1);
         assert_eq!(proposal.rejection_count, 1);
         assert_eq!(proposal.approved_at, None);
@@ -1578,7 +1577,7 @@ mod tests {
         client.approve(&o3, &pid);
 
         // Verify state after o3 approves: 2 approvals, 1 rejection, approved_at is set
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.approval_count, 2);
         assert_eq!(proposal.rejection_count, 1);
         assert!(proposal.approved_at.is_some());
@@ -1591,14 +1590,14 @@ mod tests {
         client.execute(&o1, &pid);
 
         // Verify proposal is executed
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.executed);
 
         // Verify token balances are correct
         let final_contract_balance =
-            soroban_sdk::token::StellarAssetClient::new(&env, &token_id).balance(&contract_id);
+            soroban_sdk::token::Client::new(&env, &token_id).balance(&contract_id);
         let final_recipient_balance =
-            soroban_sdk::token::StellarAssetClient::new(&env, &token_id).balance(&recipient);
+            soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
 
         assert_eq!(final_contract_balance, initial_contract_balance - 500);
         assert_eq!(final_recipient_balance, initial_recipient_balance + 500);
@@ -1621,13 +1620,13 @@ mod tests {
         client.reject(&o3, &pid);
 
         // Verify rejection state
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.rejection_count, 2);
         assert_eq!(proposal.approval_count, 1);
         assert!(proposal.approved_at.is_none()); // Never reached approval threshold
 
         // Proposal should remain in rejected state
-        let proposal_after = client.get_proposal(&pid).unwrap();
+        let proposal_after = client.get_proposal(&pid);
         assert_eq!(proposal_after.rejection_count, 2);
         assert!(!proposal_after.executed);
     }
@@ -1708,7 +1707,7 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = DELAY + 1);
         client.execute(&o3, &pid);
 
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     /// TC3 â€” Zero-delay timelock: execute() must succeed immediately after threshold is met.
@@ -1724,7 +1723,7 @@ mod tests {
         client.approve(&o2, &pid); // threshold reached â€” no time advance needed
 
         client.execute(&o3, &pid);
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     #[test]
@@ -1839,14 +1838,14 @@ mod tests {
 
         // propose auto-approves for proposer â€” threshold=1 is immediately met
         let pid = client.propose(&o1, &recipient, &token_id, &100);
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert_eq!(proposal.approval_count, 1);
         assert!(proposal.approved_at.is_some()); // threshold reached at proposal time
 
         // advance past timelock and execute
         env.ledger().with_mut(|l| l.timestamp = 3601);
         client.execute(&o3, &pid);
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     /// TC2 â€” Inter-owner independence: Owner B's approved proposal cannot be
@@ -1861,19 +1860,19 @@ mod tests {
 
         // o2 proposes â€” threshold=1 met immediately via auto-approval
         let pid = client.propose(&o2, &recipient, &token_id, &100);
-        assert!(client.get_proposal(&pid).unwrap().approved_at.is_some());
+        assert!(client.get_proposal(&pid).approved_at.is_some());
 
         // o3 tries to reject â€” already voted check: o3 hasn't voted, so rejection
         // is recorded, but approved_at is already set and cannot be unset
         client.reject(&o3, &pid);
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.approved_at.is_some()); // still approved
         assert_eq!(proposal.rejection_count, 1);
 
         // execution still succeeds after timelock
         env.ledger().with_mut(|l| l.timestamp = 3601);
         client.execute(&o3, &pid);
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     /// TC3 â€” Immediate threshold check: get_proposal returns approvals=1 right
@@ -2019,8 +2018,8 @@ mod tests {
     #[test]
     fn test_propose_emits_event() {
         use soroban_sdk::testutils::Events;
-use soroban_sdk::TryFromVal;
-let env = Env::default();
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
         env.mock_all_auths();
         let (client, o1, _, _) = setup_2of3(&env);
         let token = Address::generate(&env);
@@ -2058,7 +2057,7 @@ let env = Env::default();
 
         // propose() auto-approves proposer; threshold=1 is met immediately
         let pid = client.propose(&o1, &to, &token, &100);
-        let proposal_after_propose = client.get_proposal(&pid).unwrap();
+        let proposal_after_propose = client.get_proposal(&pid);
         assert_eq!(proposal_after_propose.approval_count, 1);
         let approved_at_from_propose = proposal_after_propose.approved_at;
         assert_eq!(approved_at_from_propose, Some(1000));
@@ -2068,7 +2067,7 @@ let env = Env::default();
         client.approve(&o2, &pid);
 
         // Verify approved_at was NOT overwritten
-        let proposal_after_approve = client.get_proposal(&pid).unwrap();
+        let proposal_after_approve = client.get_proposal(&pid);
         assert_eq!(proposal_after_approve.approval_count, 2);
         assert_eq!(
             proposal_after_approve.approved_at, approved_at_from_propose,
@@ -2079,7 +2078,7 @@ let env = Env::default();
         // Verify a third approval also doesn't change approved_at
         env.ledger().with_mut(|l| l.timestamp = 3000);
         client.approve(&o3, &pid);
-        let proposal_after_third_approve = client.get_proposal(&pid).unwrap();
+        let proposal_after_third_approve = client.get_proposal(&pid);
         assert_eq!(proposal_after_third_approve.approved_at, Some(1000));
     }
 
@@ -2087,8 +2086,8 @@ let env = Env::default();
     #[test]
     fn test_approve_emits_event() {
         use soroban_sdk::testutils::Events;
-use soroban_sdk::TryFromVal;
-let env = Env::default();
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
         env.mock_all_auths();
         let (client, o1, o2, _) = setup_2of3(&env);
         let token = Address::generate(&env);
@@ -2115,8 +2114,8 @@ let env = Env::default();
     #[test]
     fn test_reject_emits_event() {
         use soroban_sdk::testutils::Events;
-use soroban_sdk::TryFromVal;
-let env = Env::default();
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
         env.mock_all_auths();
         let (client, o1, o2, _) = setup_2of3(&env);
         let token = Address::generate(&env);
@@ -2158,7 +2157,7 @@ let env = Env::default();
         assert_eq!(result, Err(Ok(MultisigError::AlreadyCancelled)));
 
         // Verify proposal is still cancelled
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.cancelled);
     }
 
@@ -2178,7 +2177,7 @@ let env = Env::default();
         assert!(result.is_ok());
 
         // Verify proposal is cancelled
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.cancelled);
     }
 
@@ -2201,7 +2200,7 @@ let env = Env::default();
         assert!(result.is_ok());
 
         // Verify proposal is cancelled
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.cancelled);
     }
 
@@ -2245,7 +2244,7 @@ let env = Env::default();
         assert_eq!(result, Err(Ok(MultisigError::CannotCancel)));
 
         // Verify proposal is not cancelled
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(!proposal.cancelled);
     }
 
@@ -2304,8 +2303,8 @@ let env = Env::default();
     #[test]
     fn test_execute_emits_event() {
         use soroban_sdk::testutils::Events;
-use soroban_sdk::TryFromVal;
-let env = Env::default();
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|l| l.timestamp = 0);
 
@@ -2398,7 +2397,7 @@ let env = Env::default();
 
     fn setup_token(env: &Env, contract_id: &Address, amount: i128) -> Address {
         use soroban_sdk::token::StellarAssetClient;
-let token_admin = Address::generate(env);
+        let token_admin = Address::generate(env);
         let token_id = env
             .register_stellar_asset_contract_v2(token_admin)
             .address();
@@ -2432,16 +2431,58 @@ let token_admin = Address::generate(env);
         client.approve(&o2, &pid1);
         client.approve(&o2, &pid2);
 
-        // committed = 1600, balance = 1000 â†’ first execute succeeds
-        let result1 = client.try_execute(&o1, &pid1);
-        assert!(result1.is_ok(), "first execute should succeed");
+        // committed = 1600, balance = 1000 → neither proposal can execute
+        assert_eq!(client.get_committed_amount(&token_id), 1600);
 
-        // After first execute: balance = 200, committed = 800 â†’ second must fail
+        let result1 = client.try_execute(&o1, &pid1);
+        assert_eq!(result1, Err(Ok(MultisigError::InsufficientFunds)));
+
         let result2 = client.try_execute(&o1, &pid2);
         assert_eq!(result2, Err(Ok(MultisigError::InsufficientFunds)));
     }
 
     /// get_committed_amount tracks the lifecycle: 0 â†’ committed â†’ released on execute.
+    #[test]
+    fn test_two_simultaneously_approved_proposals_track_committed_amounts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+
+        let contract_id = env.register_contract(None, MultisigContract);
+        let client = MultisigContractClient::new(&env, &contract_id);
+        let o1 = Address::generate(&env);
+        let o2 = Address::generate(&env);
+        client.initialize(&vec![&env, o1.clone(), o2.clone()], &2, &0);
+
+        // Fund treasury with 2000 tokens
+        let token_id = setup_token(&env, &contract_id, 2000);
+        let recipient = Address::generate(&env);
+
+        // Propose two transfers of 500 each
+        let pid1 = client.propose(&o1, &recipient, &token_id, &500);
+        let pid2 = client.propose(&o1, &recipient, &token_id, &500);
+
+        // Before approval: committed amount is 0 (auto-approval doesn't reach threshold)
+        assert_eq!(client.get_committed_amount(&token_id), 0);
+
+        // Approve both to threshold
+        client.approve(&o2, &pid1);
+        assert_eq!(client.get_committed_amount(&token_id), 500);
+
+        client.approve(&o2, &pid2);
+        assert_eq!(client.get_committed_amount(&token_id), 1000);
+
+        // Execute first proposal - committed decreases to 500
+        client.execute(&o1, &pid1);
+        assert_eq!(client.get_committed_amount(&token_id), 500);
+        assert!(client.get_proposal(&pid1).executed);
+
+        // Execute second proposal - committed returns to 0
+        client.execute(&o1, &pid2);
+        assert_eq!(client.get_committed_amount(&token_id), 0);
+        assert!(client.get_proposal(&pid2).executed);
+    }
+
     #[test]
     fn test_committed_amount_lifecycle() {
         let env = Env::default();
@@ -2550,7 +2591,7 @@ let token_admin = Address::generate(env);
         // Contract has exactly 500 â€” execute must succeed
         let result = client.try_execute(&o1, &pid);
         assert!(result.is_ok(), "execute should succeed with exact balance");
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     // â”€â”€ Native XLM proposal tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2593,7 +2634,7 @@ let token_admin = Address::generate(env);
         let amount: i128 = 100_000_000; // 10 XLM
         let pid = client.propose_xlm(&o1, &recipient, &xlm_sac, &amount);
 
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(proposal.is_native, "proposal must be marked as native XLM");
         assert_eq!(proposal.token, xlm_sac);
         assert_eq!(proposal.to, recipient);
@@ -2616,7 +2657,7 @@ let token_admin = Address::generate(env);
 
         // o2 approves â€” threshold=2 reached
         client.approve(&o2, &pid);
-        assert!(client.get_proposal(&pid).unwrap().approved_at.is_some());
+        assert!(client.get_proposal(&pid).approved_at.is_some());
 
         // execute (zero timelock â€” no advance needed)
         client.execute(&o3, &pid);
@@ -2624,7 +2665,7 @@ let token_admin = Address::generate(env);
         // recipient received the XLM
         let token_client = soroban_sdk::token::Client::new(&env, &xlm_sac);
         assert_eq!(token_client.balance(&recipient), amount);
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
     }
 
     /// propose_xlm() by a non-owner must revert with Unauthorized.
@@ -2674,8 +2715,8 @@ let token_admin = Address::generate(env);
         client.approve(&o2, &pid_xlm);
 
         // Verify is_native is set correctly on each
-        assert!(!client.get_proposal(&pid_token).unwrap().is_native);
-        assert!(client.get_proposal(&pid_xlm).unwrap().is_native);
+        assert!(!client.get_proposal(&pid_token).is_native);
+        assert!(client.get_proposal(&pid_xlm).is_native);
 
         // Execute both
         client.execute(&o3, &pid_token);
@@ -2718,7 +2759,7 @@ let token_admin = Address::generate(env);
         assert_eq!(result, Err(Ok(MultisigError::InsufficientFunds)));
 
         // proposal.executed must still be false â€” proposal is retryable
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(
             !proposal.executed,
             "executed must remain false when transfer fails"
@@ -2760,7 +2801,7 @@ let token_admin = Address::generate(env);
 
         // First execute must succeed
         client.execute(&o3, &pid);
-        assert!(client.get_proposal(&pid).unwrap().executed);
+        assert!(client.get_proposal(&pid).executed);
 
         // Second execute must return AlreadyExecuted
         let result = client.try_execute(&o3, &pid);
@@ -2827,7 +2868,7 @@ let token_admin = Address::generate(env);
         // o1 proposes â€” auto-approves (approval=1, rejection=0, remaining=4)
         let pid = client.propose(&o1, &to, &token, &100);
         {
-            let p = client.get_proposal(&pid).unwrap();
+            let p = client.get_proposal(&pid);
             assert_eq!(p.approval_count, 1);
             assert_eq!(p.rejection_count, 0);
         }
@@ -2835,7 +2876,7 @@ let token_admin = Address::generate(env);
         // o2 rejects â†’ rejection=1, remaining = 5-1-1 = 3; 3 >= 3 â†’ CannotCancel
         client.reject(&o2, &pid);
         {
-            let p = client.get_proposal(&pid).unwrap();
+            let p = client.get_proposal(&pid);
             assert_eq!(p.rejection_count, 1);
         }
         // o4 attempts cancel at this point â€” remaining=3 == threshold â†’ CannotCancel
@@ -2849,14 +2890,14 @@ let token_admin = Address::generate(env);
         // o3 rejects â†’ rejection=2, remaining = 5-2-1 = 2; 2 < 3 â†’ can cancel
         client.reject(&o3, &pid);
         {
-            let p = client.get_proposal(&pid).unwrap();
+            let p = client.get_proposal(&pid);
             assert_eq!(p.rejection_count, 2);
         }
 
         // o4 rejects â†’ rejection=3, remaining = 5-3-1 = 1; 1 < 3 â†’ can cancel
         client.reject(&o4, &pid);
         {
-            let p = client.get_proposal(&pid).unwrap();
+            let p = client.get_proposal(&pid);
             assert_eq!(p.rejection_count, 3);
         }
 
@@ -2868,19 +2909,10 @@ let token_admin = Address::generate(env);
         );
 
         // Verify proposal is cancelled
-        let proposal = client.get_proposal(&pid).unwrap();
+        let proposal = client.get_proposal(&pid);
         assert!(
             proposal.cancelled,
             "proposal.cancelled must be true after successful cancel"
         );
     }
 }
-
-}
-
-
-
-
-
-
-

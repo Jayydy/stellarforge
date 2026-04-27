@@ -11,8 +11,6 @@
 //! - Admins call `cancel(schedule_id)` to cancel a schedule and reclaim unvested tokens
 //! - Reduces deployment costs dramatically for multi-beneficiary vesting (e.g., employee grants)
 
-use forge_constants::{error_codes, test};
-use forge_errors::CommonError;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol,
 };
@@ -65,13 +63,11 @@ pub struct VestingStatus {
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum FactoryError {
-    #[from(CommonError)]
-    Common(CommonError),
-    ScheduleNotFound = error_codes::factory::SCHEDULE_NOT_FOUND,
-    CliffNotReached = error_codes::factory::CLIFF_NOT_REACHED,
-    NothingToClaim = error_codes::factory::NOTHING_TO_CLAIM,
-    Cancelled = error_codes::factory::CANCELLED,
-    InvalidConfig = error_codes::factory::INVALID_CONFIG,
+    ScheduleNotFound = 1,
+    CliffNotReached = 3,
+    NothingToClaim = 4,
+    Cancelled = 5,
+    InvalidConfig = 6,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -111,7 +107,7 @@ impl ForgeVestingFactory {
         admin.require_auth();
 
         if total_amount <= 0 || duration_seconds == 0 || cliff_seconds > duration_seconds {
-            return Err(FactoryError::Common(CommonError::InvalidConfig));
+            return Err(FactoryError::InvalidConfig);
         }
 
         let schedule_id: u64 = env
@@ -142,13 +138,11 @@ impl ForgeVestingFactory {
             .persistent()
             .set(&DataKey::Schedule(schedule_id), &schedule_config);
         env.storage()
-            .instance()
-            .set(&DataKey::ScheduleCount, &(schedule_id + 1));
             .persistent()
-            .extend_ttl(&DataKey::Schedule(id), 17280, 34560);
+            .set(&DataKey::ScheduleCount, &(schedule_id + 1));
         env.storage()
             .persistent()
-            .set(&DataKey::ScheduleCount, &(id + 1));
+            .extend_ttl(&DataKey::Schedule(schedule_id), 17280, 34560);
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ScheduleCount, 17280, 34560);
@@ -231,34 +225,30 @@ impl ForgeVestingFactory {
     ///
     /// Only the admin may call this.
     ///
+    /// State is written to storage **before** any token transfers so that a
+    /// partial failure (e.g. the second transfer traps) cannot be exploited by
+    /// retrying `cancel()` to double-pay the beneficiary.
+    ///
     /// # Parameters
     /// - `schedule_id` — ID of the schedule to cancel.
     ///
     /// # Errors
     /// - [`FactoryError::ScheduleNotFound`]
     /// - [`FactoryError::Cancelled`]
-    /// - [`FactoryError::Unauthorized`]
     pub fn cancel(env: Env, schedule_id: u64) -> Result<(), FactoryError> {
-        let mut schedule_config: ScheduleConfig = env
+        let mut config: ScheduleConfig = env
             .storage()
             .persistent()
             .get(&DataKey::Schedule(schedule_id))
             .ok_or(FactoryError::ScheduleNotFound)?;
 
-        schedule_config.admin.require_auth();
+        config.admin.require_auth();
 
-        if schedule_config.cancelled {
+        if config.cancelled {
             return Err(FactoryError::Cancelled);
         }
 
-        let current_time = env.ledger().timestamp();
-        let vested = Self::compute_vested(&schedule_config, current_time);
         let now = env.ledger().timestamp();
-        let elapsed = now.saturating_sub(config.start_time);
-        if elapsed >= config.duration_seconds {
-            return Err(FactoryError::VestingComplete);
-        }
-
         let vested = Self::compute_vested(&config, now);
         let claimed: i128 = env
             .storage()
@@ -266,48 +256,21 @@ impl ForgeVestingFactory {
             .get(&DataKey::Claimed(schedule_id))
             .unwrap_or(0);
 
-        let token_client = token::Client::new(&env, &schedule_config.token);
         let beneficiary_amount = (vested - claimed).max(0);
         let admin_amount = (config.total_amount - vested).max(0);
 
-        // Write state before any transfers to prevent double-pay on retry.
+        // ── Write all state BEFORE any token transfers ────────────────────────
+        // This ensures that if either transfer traps, a subsequent retry will
+        // see `cancelled = true` and return `FactoryError::Cancelled` immediately,
+        // preventing any double-payment to the beneficiary or admin.
         config.cancelled = true;
         env.storage()
             .persistent()
             .set(&DataKey::Schedule(schedule_id), &config);
         // Record the beneficiary payout as claimed so a retry cannot re-pay it.
-        if beneficiary_amount > 0 {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Claimed(schedule_id), &(claimed + beneficiary_amount));
-        }
-
-        let token = token::Client::new(&env, &config.token);
-
-        // Send unclaimed vested tokens to beneficiary
-        if beneficiary_amount > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &schedule_config.beneficiary,
-                &beneficiary_amount,
-            );
-        }
-
-        // Return unvested tokens to admin
-        let admin_amount = (schedule_config.total_amount - vested).max(0);
-        if admin_amount > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &schedule_config.admin,
-                &admin_amount,
-            );
-        }
-
-        schedule_config.cancelled = true;
         env.storage()
             .persistent()
-            .set(&DataKey::Schedule(schedule_id), &schedule_config);
-            .set(&DataKey::Schedule(schedule_id), &config);
+            .set(&DataKey::Claimed(schedule_id), &(claimed + beneficiary_amount));
         env.storage()
             .persistent()
             .set(&DataKey::VestedAtCancel(schedule_id), &vested);
@@ -320,6 +283,27 @@ impl ForgeVestingFactory {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::VestedAtCancel(schedule_id), 17280, 34560);
+
+        // ── Token transfers (after state is committed) ────────────────────────
+        let token_client = token::Client::new(&env, &config.token);
+
+        // Send unclaimed vested tokens to beneficiary
+        if beneficiary_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &config.beneficiary,
+                &beneficiary_amount,
+            );
+        }
+
+        // Return unvested tokens to admin
+        if admin_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &config.admin,
+                &admin_amount,
+            );
+        }
 
         env.events()
             .publish((Symbol::new(&env, "schedule_cancelled"),), (schedule_id,));
@@ -340,15 +324,14 @@ impl ForgeVestingFactory {
     /// # Errors
     /// - [`FactoryError::ScheduleNotFound`]
     pub fn get_status(env: Env, schedule_id: u64) -> Result<VestingStatus, FactoryError> {
-        let schedule_config: ScheduleConfig = env
+        let config: ScheduleConfig = env
             .storage()
             .persistent()
             .get(&DataKey::Schedule(schedule_id))
             .ok_or(FactoryError::ScheduleNotFound)?;
 
-        let current_time = env.ledger().timestamp();
-        let vested = Self::compute_vested(&schedule_config, current_time);
         let now = env.ledger().timestamp();
+        // After cancellation, vested is frozen at the cancel-time snapshot.
         let vested = if config.cancelled {
             env.storage()
                 .persistent()
@@ -363,9 +346,8 @@ impl ForgeVestingFactory {
             .get(&DataKey::Claimed(schedule_id))
             .unwrap_or(0);
 
-        let elapsed = current_time.saturating_sub(schedule_config.start_time);
-        let claimable = if elapsed >= schedule_config.cliff_seconds {
         let elapsed = now.saturating_sub(config.start_time);
+        // After cancellation the payout has already been sent; claimable is 0.
         let claimable = if !config.cancelled && elapsed >= config.cliff_seconds {
             (vested - claimed).max(0)
         } else {
@@ -374,13 +356,13 @@ impl ForgeVestingFactory {
 
         Ok(VestingStatus {
             schedule_id,
-            total_amount: schedule_config.total_amount,
+            total_amount: config.total_amount,
             claimed,
             vested,
             claimable,
-            cliff_reached: elapsed >= schedule_config.cliff_seconds,
-            fully_vested: vested >= schedule_config.total_amount,
-            cancelled: schedule_config.cancelled,
+            cliff_reached: elapsed >= config.cliff_seconds,
+            fully_vested: vested >= config.total_amount,
+            cancelled: config.cancelled,
         })
     }
 
@@ -394,11 +376,6 @@ impl ForgeVestingFactory {
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    /// Compute the amount vested for a schedule at `now`.
-    ///
-    /// Returns `0` before the cliff or when the schedule has been cancelled,
-    /// returns the full amount once duration is reached, and otherwise performs
-    /// linear vesting based on elapsed time.
     /// Compute the total amount of tokens vested for a schedule up to a given timestamp.
     ///
     /// This function implements linear vesting with an optional cliff period,
@@ -413,13 +390,8 @@ impl ForgeVestingFactory {
     /// # Linear Vesting Formula
     ///
     /// ```text
-    /// vested = total_amount × (elapsed - cliff) / (duration - cliff)
+    /// vested = total_amount × elapsed / duration
     /// ```
-    ///
-    /// This ensures:
-    /// - At cliff time: vested = 0
-    /// - At duration time: vested = total_amount
-    /// - Between: proportional linear increase
     ///
     /// # Returns
     ///
@@ -443,6 +415,7 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use forge_constants::test;
 
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
@@ -455,7 +428,7 @@ mod tests {
         let token = env
             .register_stellar_asset_contract_v2(token_admin.clone())
             .address();
-        token::Client::new(env, &token).mint(admin, &amount);
+        soroban_sdk::token::StellarAssetClient::new(env, &token).mint(admin, &amount);
         token
     }
 
@@ -680,18 +653,6 @@ mod tests {
 
     #[test]
     fn test_get_status_vested_reflects_cancel_time_not_zero() {
-    // ── #436 comprehensive tests ──────────────────────────────────────────────
-
-    /// claim() at 25%, 50%, 75%, and 100% of vesting duration returns correct amounts.
-    #[test]
-    fn test_claim_at_quarter_intervals() {
-    /// Test multiple schedules for same beneficiary are fully independent.
-    /// 
-    /// Creates two schedules for the same beneficiary with different admins and amounts,
-    /// then verifies that claiming from one doesn't affect the other, and cancelling
-    /// one doesn't affect the other.
-    #[test]
-    fn test_multiple_schedules_same_beneficiary_independent() {
         let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|l| l.timestamp = 0);
@@ -714,8 +675,18 @@ mod tests {
         assert!(status.cancelled);
     }
 
+    // ── #436 comprehensive tests ──────────────────────────────────────────────
+
+    /// claim() at 25%, 50%, 75%, and 100% of vesting duration returns correct amounts.
     #[test]
-    fn test_cancel_fully_vested_schedule_fails() {
+    fn test_claim_at_quarter_intervals() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = make_client(&env);
+        let admin = Address::generate(&env);
+        let beneficiary = Address::generate(&env);
+        let token_addr = setup_token(&env, &admin, 1_000);
         let tok = token::Client::new(&env, &token_addr);
 
         // No cliff, 1000s duration, 1000 tokens
@@ -740,6 +711,83 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 1_000);
         assert_eq!(client.claim(&id), 250);
         assert_eq!(tok.balance(&beneficiary), 1_000);
+    }
+
+    /// Test multiple schedules for same beneficiary are fully independent.
+    ///
+    /// Creates two schedules for the same beneficiary with different admins and amounts,
+    /// then verifies that claiming from one doesn't affect the other, and cancelling
+    /// one doesn't affect the other.
+    #[test]
+    fn test_multiple_schedules_same_beneficiary_independent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        let client = make_client(&env);
+
+        // Create different admins for each schedule
+        let admin_a = Address::generate(&env);
+        let admin_b = Address::generate(&env);
+        let beneficiary = Address::generate(&env);
+        let token = setup_token(&env, &admin_a, 3_000); // Fund admin_a initially
+
+        // Fund admin_b separately
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&admin_a, &admin_b, &test::SMALL_AMOUNT);
+
+        // Create schedule_a: 1000 tokens, 1000 second duration
+        let schedule_a = client.create_schedule(&token, &beneficiary, &admin_a, &test::SMALL_AMOUNT, &test::NO_CLIFF, &test::MEDIUM_DURATION);
+
+        // Create schedule_b: 500 tokens, 1000 second duration
+        let schedule_b_amount = test::SMALL_AMOUNT / 2;
+        let schedule_b = client.create_schedule(&token, &beneficiary, &admin_b, &schedule_b_amount, &test::NO_CLIFF, &test::MEDIUM_DURATION);
+
+        // Verify schedule count is 2
+        assert_eq!(client.get_schedule_count(), 2);
+
+        // Advance time to 50% (500 seconds)
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_CLIFF);
+
+        // Claim from schedule_a only
+        let claimed_amount = client.claim(&schedule_a);
+        assert_eq!(claimed_amount, test::SMALL_AMOUNT / 2); // 50% of 1000 = 500
+
+        // Verify schedule_a status reflects the claim
+        let status_a = client.get_status(&schedule_a);
+        assert_eq!(status_a.claimed, test::SMALL_AMOUNT / 2);
+        assert_eq!(status_a.claimable, 0);
+
+        // Verify schedule_b is unaffected (still 0 claimed)
+        let status_b = client.get_status(&schedule_b);
+        assert_eq!(status_b.claimed, 0);
+        assert_eq!(status_b.claimable, test::SMALL_AMOUNT / 4); // 50% of 500 = 250
+
+        // Cancel schedule_b
+        client.cancel(&schedule_b);
+
+        // Verify schedule_b is cancelled
+        let status_b_cancelled = client.get_status(&schedule_b);
+        assert!(status_b_cancelled.cancelled);
+
+        // Verify schedule_a is still active and claimable
+        let status_a_after_cancel = client.get_status(&schedule_a);
+        assert!(!status_a_after_cancel.cancelled);
+        assert_eq!(status_a_after_cancel.claimed, test::SMALL_AMOUNT / 2); // Still has previous claim
+
+        // Advance to full vesting for schedule_a
+        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_DURATION);
+
+        // Should be able to claim remaining amount from schedule_a
+        let final_claim = client.claim(&schedule_a);
+        assert_eq!(final_claim, test::SMALL_AMOUNT / 2); // Remaining 50% = 500
+
+        // Verify schedule_a is fully claimed
+        let status_a_final = client.get_status(&schedule_a);
+        assert_eq!(status_a_final.claimed, test::SMALL_AMOUNT); // Total claimed = 1_000
+        assert!(status_a_final.fully_vested);
+
+        // Schedule count should remain 2 throughout
+        assert_eq!(client.get_schedule_count(), 2);
     }
 
     /// claim() before cliff reverts with CliffNotReached.
@@ -800,10 +848,13 @@ mod tests {
 
         let id = client.create_schedule(&token, &beneficiary, &admin, &1_000, &0, &1_000);
 
-        // Advance past full duration
-        env.ledger().with_mut(|l| l.timestamp = 1_000);
+        // Cancel once at 500s
+        env.ledger().with_mut(|l| l.timestamp = 500);
+        client.cancel(&id);
+
+        // Second cancel must revert with Cancelled
         let err = client.try_cancel(&id).unwrap_err();
-        assert_eq!(err, Ok(FactoryError::VestingComplete));
+        assert_eq!(err, Ok(FactoryError::Cancelled));
     }
 
     #[test]
@@ -833,12 +884,6 @@ mod tests {
         for id in 0..N {
             assert!(client.try_get_status(&id).is_ok());
         }
-        client.cancel(&id);
-
-        assert_eq!(
-            client.try_cancel(&id).unwrap_err(),
-            Ok(FactoryError::Cancelled)
-        );
     }
 
     /// get_status() after a partial claim reflects correct claimed and claimable values.
@@ -918,51 +963,26 @@ mod tests {
     #[test]
     fn test_non_beneficiary_cannot_claim() {
         let env = Env::default();
-        // Do NOT mock_all_auths — we need real auth checking
+        // Use mock_all_auths for setup, then restrict for the attack attempt
+        env.mock_all_auths();
         let client = make_client(&env);
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
-        let attacker = Address::generate(&env);
+        let _attacker = Address::generate(&env);
         let token = setup_token(&env, &admin, 1_000);
 
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &admin,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &client.address,
-                fn_name: "create_schedule",
-                args: soroban_sdk::vec![
-                    &env,
-                    token.clone().into(),
-                    beneficiary.clone().into(),
-                    admin.clone().into(),
-                    1_000i128.into(),
-                    0u64.into(),
-                    1_000u64.into(),
-                ],
-                sub_invokes: &[],
-            },
-        }]);
         let id = client.create_schedule(&token, &beneficiary, &admin, &1_000, &0, &1_000);
 
         env.ledger().with_mut(|l| l.timestamp = 500);
 
-        // attacker tries to claim — auth will fail
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &attacker,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &client.address,
-                fn_name: "claim",
-                args: soroban_sdk::vec![&env, id.into()],
-                sub_invokes: &[],
-            },
-        }]);
-        // The contract calls beneficiary.require_auth() which will fail for attacker
+        // Provide no mock auths — beneficiary.require_auth() will fail
+        env.mock_auths(&[]);
         let result = client.try_claim(&id);
         assert!(result.is_err(), "non-beneficiary must not be able to claim");
     }
 
     /// Second cancel() call after a partial failure cannot double-pay the beneficiary.
-    /// Simulates the bug scenario from #433: state is written before transfers,
+    /// Simulates the bug scenario from #500: state is written before transfers,
     /// so a retry sees cancelled=true and returns Cancelled immediately.
     #[test]
     fn test_cancel_idempotent_no_double_pay() {
@@ -993,68 +1013,5 @@ mod tests {
         // Balances unchanged
         assert_eq!(tok.balance(&beneficiary), 400);
         assert_eq!(tok.balance(&admin), 600);
-        
-        // Create different admins for each schedule
-        let admin_a = Address::generate(&env);
-        let admin_b = Address::generate(&env);
-        let beneficiary = Address::generate(&env);
-        let token = setup_token(&env, &admin_a, 3_000); // Fund admin_a initially
-        
-        // Fund admin_b separately
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&admin_a, &admin_b, &test::SMALL_AMOUNT);
-
-        // Create schedule_a: 1000 tokens, 1000 second duration
-        let schedule_a = client.create_schedule(&token, &beneficiary, &admin_a, &test::SMALL_AMOUNT, &test::NO_CLIFF, &test::MEDIUM_DURATION);
-        
-        // Create schedule_b: 500 tokens, 1000 second duration  
-        let schedule_b = client.create_schedule(&token, &beneficiary, &admin_b, &test::SMALL_AMOUNT / 2, &test::NO_CLIFF, &test::MEDIUM_DURATION);
-
-        // Verify schedule count is 2
-        assert_eq!(client.get_schedule_count(), 2);
-
-        // Advance time to 50% (500 seconds)
-        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_CLIFF);
-
-        // Claim from schedule_a only
-        let claimed_amount = client.claim(&schedule_a);
-        assert_eq!(claimed_amount, test::SMALL_AMOUNT / 2); // 50% of 1000 = 500
-
-        // Verify schedule_a status reflects the claim
-        let status_a = client.get_status(&schedule_a);
-        assert_eq!(status_a.claimed, test::SMALL_AMOUNT / 2);
-        assert_eq!(status_a.claimable, 0);
-
-        // Verify schedule_b is unaffected (still 0 claimed)
-        let status_b = client.get_status(&schedule_b);
-        assert_eq!(status_b.claimed, 0);
-        assert_eq!(status_b.claimable, test::SMALL_AMOUNT / 4); // 50% of 500 = 250
-
-        // Cancel schedule_b
-        client.cancel(&schedule_b);
-
-        // Verify schedule_b is cancelled
-        let status_b_cancelled = client.get_status(&schedule_b);
-        assert!(status_b_cancelled.cancelled);
-
-        // Verify schedule_a is still active and claimable
-        let status_a_after_cancel = client.get_status(&schedule_a);
-        assert!(!status_a_after_cancel.cancelled);
-        assert_eq!(status_a_after_cancel.claimed, test::SMALL_AMOUNT / 2); // Still has previous claim
-        
-        // Advance to full vesting for schedule_a
-        env.ledger().with_mut(|l| l.timestamp = test::MEDIUM_DURATION);
-        
-        // Should be able to claim remaining amount from schedule_a
-        let final_claim = client.claim(&schedule_a);
-        assert_eq!(final_claim, test::SMALL_AMOUNT / 2); // Remaining 50% = 500
-        
-        // Verify schedule_a is fully claimed
-        let status_a_final = client.get_status(&schedule_a);
-        assert_eq!(status_a_final.claimed, test::SMALL_AMOUNT); // Total claimed = 1_000
-        assert!(status_a_final.fully_vested);
-
-        // Schedule count should remain 2 throughout
-        assert_eq!(client.get_schedule_count(), 2);
     }
 }
