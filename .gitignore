@@ -78,3 +78,7 @@ yarn.lock
 coverage/
 *.lcov
 tarpaulin-report.html
+
+# qodo
+.qodo
+
